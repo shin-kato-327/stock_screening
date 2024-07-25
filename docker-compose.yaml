@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  pgdatabase:
+    image: postgres:13
+    environment:
+      - POSTGRES_USER=root
+      - POSTGRES_PASSWORD=root
+      - POSTGRES_DB=financial_data
+    volumes:
+      - "./financial_data:/var/lib/postgresql/data:rw"
+    ports:
+      - "5433:5432"
+    networks:
+      - pg_network
+
+  pgadmin:
+    image: dpage/pgadmin4
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@admin.com
+      - PGADMIN_DEFAULT_PASSWORD=root
+    ports:
+      - "8080:80"
+    networks:
+      - pg_network
+
+networks:
+  pg_network:
+    driver: bridge
