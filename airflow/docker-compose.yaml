@@ -11,6 +11,8 @@ services:
       test: ["CMD", "pg_isready", "-U", "airflow"]
       interval: 5s
       retries: 5
+    networks:
+      - financial_network 
 
   webserver:
     image: apache/airflow:2.7.1
@@ -33,7 +35,9 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
+    networks:
+      - financial_network 
+ 
   scheduler:
     image: apache/airflow:2.7.1
     depends_on:
@@ -44,11 +48,21 @@ services:
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       - AIRFLOW__CORE__FERNET_KEY=46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=
       - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - _PIP_ADDITIONAL_REQUIREMENTS=arelle-release Pillow pathlib yfinance
+
     volumes:
       - ./dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ../content/documentlist:/opt/airflow/content/documentlist
+      - ../content/xsd:/opt/airflow/content/xsd
     command: airflow scheduler
-
+    networks:
+      - financial_network
+ 
 volumes:
   postgres-db-volume:
+
+networks:
+  financial_network:
+    name: financial_network
+    external: true

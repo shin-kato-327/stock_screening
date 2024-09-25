@@ -13,6 +13,7 @@ services:
       - "5433:5432"
     networks:
       - pg_network
+      - financial_network
 
   pgadmin:
     image: dpage/pgadmin4
@@ -27,3 +28,6 @@ services:
 networks:
   pg_network:
     driver: bridge
+  financial_network:
+    name: financial_network
+    external: true
