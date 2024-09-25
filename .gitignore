@@ -163,3 +163,7 @@ cython_debug/
 
 parameters.json
 ./airflow/dags/parameters.json
+# content folder
+./content/
+/financial_data/
+/financial_data_old/
