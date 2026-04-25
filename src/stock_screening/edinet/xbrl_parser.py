@@ -33,9 +33,22 @@ class FinancialFact:
     currency_code: str = "JPY"
 
 
+def _classify_unit(fact) -> str | None:
+    """JPY → 'JPY', shares → 'SHR'. Anything else (USD, ratios, etc.) → None
+    (signals the caller to skip this fact)."""
+    if fact.unit is None:
+        return None
+    unit_str = str(fact.unit.value).lower()
+    if "jpy" in unit_str:
+        return "JPY"
+    if "shares" in unit_str or "shrs" in unit_str:
+        return "SHR"
+    return None
+
+
 def extract_facts(doc_id: str, xbrl_path: Path) -> list[FinancialFact]:
-    """Load an XBRL file via Arelle and emit one FinancialFact per JPY fact
-    in CurrentYearDuration / CurrentYearInstant.
+    """Load an XBRL file via Arelle and emit one FinancialFact per JPY or
+    shares fact in CurrentYearDuration / CurrentYearInstant.
     """
     from arelle import Cntlr  # imported lazily; arelle is heavy
 
@@ -48,7 +61,8 @@ def extract_facts(doc_id: str, xbrl_path: Path) -> list[FinancialFact]:
 
         facts: list[FinancialFact] = []
         for fact in model.facts:
-            if fact.unit is None or str(fact.unit.value) != "JPY":
+            currency_code = _classify_unit(fact)
+            if currency_code is None:
                 continue
             if fact.contextID not in RELEVANT_CATEGORIES:
                 continue
@@ -67,7 +81,7 @@ def extract_facts(doc_id: str, xbrl_path: Path) -> list[FinancialFact]:
                     period_end=end,
                     category_id=fact.contextID,
                     concept_id=concept_id,
-                    currency_code="JPY",
+                    currency_code=currency_code,
                 )
             )
         return facts

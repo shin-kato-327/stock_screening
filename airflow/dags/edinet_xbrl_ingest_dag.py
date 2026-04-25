@@ -9,7 +9,6 @@ slow filing doesn't block the rest of the day's batch.
 from __future__ import annotations
 
 import logging
-import shutil
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path

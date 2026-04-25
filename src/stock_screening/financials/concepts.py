@@ -76,6 +76,14 @@ CONCEPTS: tuple[ConceptMap, ...] = (
         concept_ids=("jppfs_cor:Assets",),
         labels=("資産合計",),
     ),
+    ConceptMap(
+        field_name="issued_shares",
+        concept_ids=(
+            "jpcrp_cor:TotalNumberOfIssuedSharesSummaryOfBusinessResults",
+            "jpcrp_cor:NumberOfIssuedAndOutstandingSharesAtTheEndOfFiscalYearTotalNumberOfShares",
+        ),
+        labels=("発行済株式総数", "発行済株式総数(普通株式)"),
+    ),
 )
 
 # Index for fast resolution at mart-build time.
