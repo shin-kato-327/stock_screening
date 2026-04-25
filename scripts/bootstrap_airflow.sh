@@ -27,7 +27,7 @@ require() {
 }
 
 require EDINET_KEY
-require JQUANTS_REFRESH_TOKEN
+require JQUANTS_API_KEY
 require POSTGRES_USER
 require POSTGRES_PASSWORD
 require POSTGRES_HOST
@@ -36,7 +36,7 @@ require POSTGRES_DB
 
 echo "Setting Airflow Variables..."
 airflow variables set EDINET_KEY "${EDINET_KEY}"
-airflow variables set JQUANTS_REFRESH_TOKEN "${JQUANTS_REFRESH_TOKEN}"
+airflow variables set JQUANTS_API_KEY "${JQUANTS_API_KEY}"
 airflow variables set INITIAL_CAPITAL "${INITIAL_CAPITAL:-10000000}"
 airflow variables set MAX_POSITIONS "${MAX_POSITIONS:-20}"
 airflow variables set TRANSACTION_COST_BPS "${TRANSACTION_COST_BPS:-10}"

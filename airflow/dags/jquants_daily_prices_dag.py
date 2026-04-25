@@ -1,6 +1,10 @@
-"""Pull daily prices + listed-info from JQuants for the run date and
-upsert into t_daily_stock_perf. Computes marketCap via close × latest
-known issued_shares from t_financials_annual (no yfinance dependency).
+"""Pull daily quotes from JQuants v2 for the run date and upsert into
+t_daily_stock_perf. Computes marketCap via close × latest known
+issued_shares from t_financials_annual.
+
+v2 API doesn't have a single "listed_info" endpoint, so sector / company
+metadata columns on t_daily_stock_perf are populated only when EDINET
+mappings supply them; the screen itself reads only close + marketCap.
 """
 
 from __future__ import annotations
@@ -19,9 +23,9 @@ logger = logging.getLogger(__name__)
 
 @dag(
     dag_id="jquants_daily_prices_dag",
-    description="JQuants listed_info + daily_quotes → t_daily_stock_perf.",
+    description="JQuants v2 daily_quotes → t_daily_stock_perf.",
     start_date=datetime(2025, 4, 1, tzinfo=JST),
-    schedule="0 17 * * 1-5",  # 17:00 JST weekdays — after market close
+    schedule="0 17 * * 1-5",
     catchup=True,
     max_active_runs=4,
     default_args={
@@ -37,37 +41,26 @@ def jquants_daily_prices_dag():
         import pandas as pd
 
         from stock_screening import config, db
-        from stock_screening.jquants.client import (
-            PRIME_MARKET,
-            STANDARD_MARKET,
-            JQuantsClient,
-        )
+        from stock_screening.jquants.client import JQuantsClient
 
         run_date = data_interval_start.date()
-        client = JQuantsClient(config.jquants_refresh_token())
-
-        info = client.listed_info(run_date)
-        if info.empty:
-            logger.info("no listed_info for %s (likely non-trading day)", run_date)
-            return 0
-
-        info = info[info["MarketCode"].isin([PRIME_MARKET, STANDARD_MARKET])].copy()
-        info["MarketCodeCleansed"] = info["Code"].str[:4]
-        info = info.rename(columns={"Code": "ShokenCode"})
+        client = JQuantsClient(config.jquants_api_key())
 
         quotes = client.daily_quotes(target_date=run_date)
         if quotes.empty:
-            logger.info("no quotes for %s", run_date)
+            logger.info("no quotes for %s (likely non-trading day)", run_date)
             return 0
-        quotes = quotes.rename(columns={"Code": "ShokenCode", "Close": "close"})
-        quotes_subset = quotes[["ShokenCode", "close", "Volume"]].rename(
-            columns={"Volume": "volume"}
-        )
+
+        # v2 uses C / Vo for close / volume; collapse 5-digit market codes
+        # to 4-digit secCode (last digit is a check digit added by JPX).
+        quotes = quotes.rename(columns={"Code": "ShokenCode", "C": "close", "Vo": "volume"})
+        quotes["ShokenCode"] = quotes["ShokenCode"].astype(str)
+        quotes_subset = quotes[["ShokenCode", "close", "volume"]].copy()
 
         engine = db.get_engine()
         shares = pd.read_sql(
             text(
-                'SELECT DISTINCT ON ("secCode") "secCode" AS ShokenCode, issued_shares '
+                'SELECT DISTINCT ON ("secCode") "secCode" AS "ShokenCode", issued_shares '
                 "FROM t_financials_annual "
                 "WHERE issued_shares IS NOT NULL AND period_end <= :d "
                 'ORDER BY "secCode", period_end DESC'
@@ -76,26 +69,13 @@ def jquants_daily_prices_dag():
             params={"d": run_date},
         )
 
-        merged = info.merge(quotes_subset, on="ShokenCode", how="inner").merge(
-            shares, on="ShokenCode", how="left"
-        )
-        if merged.empty:
-            return 0
-
+        merged = quotes_subset.merge(shares, on="ShokenCode", how="left")
         merged["Date"] = run_date
         merged["marketCap"] = (
             merged["close"].astype("float64") * merged["issued_shares"].astype("float64")
         ).round().astype("Int64")
 
-        cols = (
-            "Date", "ShokenCode", "CompanyName", "CompanyNameEnglish",
-            "Sector17Code", "Sector17CodeName", "Sector33Code", "Sector33CodeName",
-            "ScaleCategory", "MarketCode", "MarketCodeName", "MarketCodeCleansed",
-            "close", "volume", "marketCap",
-        )
-        for c in cols:
-            if c not in merged.columns:
-                merged[c] = None
+        cols = ("Date", "ShokenCode", "close", "volume", "marketCap")
         rows = merged[list(cols)].where(pd.notna(merged[list(cols)]), None).to_dict("records")
 
         col_list = ", ".join(f'"{c}"' for c in cols)

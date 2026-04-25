@@ -1,7 +1,7 @@
 """SQLAlchemy engine factory.
 
-Inside Airflow, prefer the PostgresHook (uses Connection ID
-'financial_data' so secrets stay in Airflow's metadata DB). Outside
+Inside Airflow tasks (detected via AIRFLOW_CTX_DAG_ID env var), prefer
+the PostgresHook so secrets stay in Airflow's metadata DB. Outside
 Airflow, build the URL from POSTGRES_* env vars.
 """
 
@@ -14,13 +14,15 @@ from sqlalchemy.engine import Engine, create_engine
 CONN_ID = "financial_data"
 
 
+def _in_airflow_task() -> bool:
+    return "AIRFLOW_CTX_DAG_ID" in os.environ
+
+
 def get_engine() -> Engine:
-    try:
+    if _in_airflow_task():
         from airflow.providers.postgres.hooks.postgres import PostgresHook  # type: ignore
 
         return PostgresHook(postgres_conn_id=CONN_ID).get_sqlalchemy_engine()
-    except Exception:
-        pass
 
     user = os.environ["POSTGRES_USER"]
     pw = os.environ["POSTGRES_PASSWORD"]

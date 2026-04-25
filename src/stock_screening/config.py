@@ -11,15 +11,17 @@ from __future__ import annotations
 import os
 
 
+def _in_airflow_task() -> bool:
+    return "AIRFLOW_CTX_DAG_ID" in os.environ
+
+
 def _get(name: str, default: str | None = None) -> str | None:
-    try:
+    if _in_airflow_task():
         from airflow.models import Variable  # type: ignore
 
         v = Variable.get(name, default_var=None)
         if v is not None:
             return v
-    except Exception:
-        pass
     return os.environ.get(name, default)
 
 
@@ -30,10 +32,11 @@ def edinet_key() -> str:
     return v
 
 
-def jquants_refresh_token() -> str:
-    v = _get("JQUANTS_REFRESH_TOKEN")
+def jquants_api_key() -> str:
+    """JQuants v2 x-api-key — single credential, sent as a request header."""
+    v = _get("JQUANTS_API_KEY")
     if not v:
-        raise RuntimeError("JQUANTS_REFRESH_TOKEN not set")
+        raise RuntimeError("JQUANTS_API_KEY not set")
     return v
 
 
