@@ -68,10 +68,20 @@ def compute_screen(engine: Engine, run_date: date) -> pd.DataFrame:
     company with the ratio and qualifies flag.
     """
     with engine.connect() as conn:
-        df = pd.read_sql(_SCREEN_SQL, conn, params={"run_date": run_date})
+        rows = conn.execute(_SCREEN_SQL, {"run_date": run_date}).fetchall()
+
+    cols = [
+        "sec_code", "source_period_end", "current_assets",
+        "interest_bearing_debt", "investment_securities", "market_cap",
+    ]
+    df = pd.DataFrame(rows, columns=cols)
 
     if df.empty:
         return df.assign(ratio=pd.Series(dtype=float), qualifies=pd.Series(dtype=bool))
+
+    # SA1.4 returns Decimal for NUMERIC columns; cast to float for arithmetic.
+    for col in ("current_assets", "interest_bearing_debt", "investment_securities", "market_cap"):
+        df[col] = df[col].astype(float)
 
     df["ratio"] = (
         df["current_assets"].fillna(0)
