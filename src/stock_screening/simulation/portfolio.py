@@ -58,14 +58,22 @@ def load_previous_snapshot(engine: Engine, before_date: date) -> PortfolioSnapsh
         if nav_row is None:
             return None
 
-        positions = pd.read_sql(
+        # SA1.4 connection objects don't satisfy pandas 2.2's read_sql
+        # contract; fetch and build the DataFrame manually.
+        prows = conn.execute(
             text(
                 'SELECT "secCode", shares, avg_cost, last_price, market_value '
                 "FROM t_sim_positions WHERE as_of_date = :d"
             ),
-            conn,
-            params={"d": nav_row["as_of_date"]},
+            {"d": nav_row["as_of_date"]},
+        ).fetchall()
+        positions = pd.DataFrame(
+            prows,
+            columns=["secCode", "shares", "avg_cost", "last_price", "market_value"],
         )
+        for c in ("avg_cost", "last_price", "market_value"):
+            if c in positions.columns:
+                positions[c] = positions[c].astype(float)
 
     return PortfolioSnapshot(
         as_of_date=nav_row["as_of_date"],
