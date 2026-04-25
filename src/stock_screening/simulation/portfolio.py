@@ -31,41 +31,47 @@ class PortfolioSnapshot:
         return {row.secCode: int(row.shares) for row in self.positions.itertuples()}
 
 
-def delete_outputs_for_date(engine: Engine, run_date: date) -> None:
-    """Idempotency hook for backfill / re-runs."""
+def delete_outputs_for_date(engine: Engine, run_date: date, strategy_name: str) -> None:
+    """Idempotency hook for backfill / re-runs. Scoped to one strategy
+    so re-running strategy A doesn't wipe strategy B's outputs."""
     with engine.begin() as conn:
         for table, col in (
             ("t_sim_positions", "as_of_date"),
             ("t_sim_trades", "trade_date"),
             ("t_sim_portfolio_nav", "as_of_date"),
         ):
-            conn.execute(text(f"DELETE FROM {table} WHERE {col} = :d"), {"d": run_date})
+            conn.execute(
+                text(f"DELETE FROM {table} WHERE {col} = :d AND strategy_name = :s"),
+                {"d": run_date, "s": strategy_name},
+            )
 
 
-def load_previous_snapshot(engine: Engine, before_date: date) -> PortfolioSnapshot | None:
-    """Most recent NAV snapshot strictly before `before_date`. Returns
-    None on a cold start (no prior runs).
+def load_previous_snapshot(
+    engine: Engine, before_date: date, strategy_name: str
+) -> PortfolioSnapshot | None:
+    """Most recent NAV snapshot strictly before `before_date` for the
+    given strategy. Returns None on a cold start.
     """
     with engine.connect() as conn:
         nav_row = conn.execute(
             text(
                 "SELECT as_of_date, cash, positions_value, total_nav, n_positions "
-                "FROM t_sim_portfolio_nav WHERE as_of_date < :d "
+                "FROM t_sim_portfolio_nav "
+                "WHERE as_of_date < :d AND strategy_name = :s "
                 "ORDER BY as_of_date DESC LIMIT 1"
             ),
-            {"d": before_date},
+            {"d": before_date, "s": strategy_name},
         ).mappings().first()
         if nav_row is None:
             return None
 
-        # SA1.4 connection objects don't satisfy pandas 2.2's read_sql
-        # contract; fetch and build the DataFrame manually.
         prows = conn.execute(
             text(
                 'SELECT "secCode", shares, avg_cost, last_price, market_value '
-                "FROM t_sim_positions WHERE as_of_date = :d"
+                "FROM t_sim_positions "
+                "WHERE as_of_date = :d AND strategy_name = :s"
             ),
-            {"d": nav_row["as_of_date"]},
+            {"d": nav_row["as_of_date"], "s": strategy_name},
         ).fetchall()
         positions = pd.DataFrame(
             prows,
@@ -148,11 +154,14 @@ def apply_trades(
     return pos.reset_index(), new_cash
 
 
-def persist_positions(engine: Engine, as_of_date: date, positions: pd.DataFrame) -> int:
+def persist_positions(
+    engine: Engine, as_of_date: date, positions: pd.DataFrame, strategy_name: str
+) -> int:
     if positions.empty:
         return 0
     rows = [
         {
+            "strategy_name": strategy_name,
             "as_of_date": as_of_date,
             "secCode": r["secCode"],
             "shares": int(r["shares"]),
@@ -165,8 +174,8 @@ def persist_positions(engine: Engine, as_of_date: date, positions: pd.DataFrame)
     sql = text(
         """
         INSERT INTO t_sim_positions
-            (as_of_date, "secCode", shares, avg_cost, last_price, market_value)
-        VALUES (:as_of_date, :secCode, :shares, :avg_cost, :last_price, :market_value)
+            (strategy_name, as_of_date, "secCode", shares, avg_cost, last_price, market_value)
+        VALUES (:strategy_name, :as_of_date, :secCode, :shares, :avg_cost, :last_price, :market_value)
         """
     )
     with engine.begin() as conn:
@@ -174,11 +183,14 @@ def persist_positions(engine: Engine, as_of_date: date, positions: pd.DataFrame)
     return len(rows)
 
 
-def persist_trades(engine: Engine, trade_date: date, trades: list[Trade]) -> int:
+def persist_trades(
+    engine: Engine, trade_date: date, trades: list[Trade], strategy_name: str
+) -> int:
     if not trades:
         return 0
     rows = [
         {
+            "strategy_name": strategy_name,
             "trade_date": trade_date,
             "secCode": t.sec_code,
             "side": t.side,
@@ -192,8 +204,8 @@ def persist_trades(engine: Engine, trade_date: date, trades: list[Trade]) -> int
     sql = text(
         """
         INSERT INTO t_sim_trades
-            (trade_date, "secCode", side, shares, price, commission, reason)
-        VALUES (:trade_date, :secCode, :side, :shares, :price, :commission, :reason)
+            (strategy_name, trade_date, "secCode", side, shares, price, commission, reason)
+        VALUES (:strategy_name, :trade_date, :secCode, :side, :shares, :price, :commission, :reason)
         """
     )
     with engine.begin() as conn:
@@ -207,20 +219,22 @@ def persist_nav(
     cash: float,
     positions: pd.DataFrame,
     benchmark_nav: float | None,
+    strategy_name: str,
 ) -> None:
     pos_value = float(positions["market_value"].sum()) if not positions.empty else 0.0
     n = int(len(positions))
     sql = text(
         """
         INSERT INTO t_sim_portfolio_nav
-            (as_of_date, cash, positions_value, total_nav, benchmark_nav, n_positions)
-        VALUES (:as_of_date, :cash, :positions_value, :total_nav, :benchmark_nav, :n)
+            (strategy_name, as_of_date, cash, positions_value, total_nav, benchmark_nav, n_positions)
+        VALUES (:strategy_name, :as_of_date, :cash, :positions_value, :total_nav, :benchmark_nav, :n)
         """
     )
     with engine.begin() as conn:
         conn.execute(
             sql,
             {
+                "strategy_name": strategy_name,
                 "as_of_date": as_of_date,
                 "cash": cash,
                 "positions_value": pos_value,

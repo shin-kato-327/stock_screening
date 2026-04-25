@@ -3,7 +3,6 @@ import pytest
 
 from stock_screening.simulation.rebalance import (
     LOT_SIZE,
-    Trade,
     compute_target_shares,
     generate_trades,
     select_target_names,
@@ -161,3 +160,75 @@ def test_no_trade_when_price_missing():
 def test_lot_size_is_100():
     """JP standard board lot. Hardcoded constant; flag if it ever changes."""
     assert LOT_SIZE == 100
+
+
+# Multi-strategy: full_rebalance + ratio weighting --------------------
+
+
+def test_select_full_rebalance_ignores_holdings():
+    """full_rebalance: target = top N regardless of current holdings."""
+    qual = _qual([("A", 3.0), ("B", 2.5), ("C", 2.0)])
+    out = select_target_names(qual, current=["X", "Y"], max_positions=2, swap_rule="full_rebalance")
+    assert out == ["A", "B"]
+
+
+def test_full_rebalance_drops_held_when_better_exists():
+    qual = _qual([("X", 1.5), ("Y", 1.4), ("Z", 1.3)])
+    out = select_target_names(qual, current=["Z"], max_positions=2, swap_rule="full_rebalance")
+    assert out == ["X", "Y"]
+
+
+def test_select_unknown_swap_rule_raises():
+    with pytest.raises(ValueError, match="unknown swap_rule"):
+        select_target_names(_qual([("A", 2.0)]), current=[], max_positions=1, swap_rule="other")
+
+
+def test_ratio_weighting_concentrates_on_higher_ratio():
+    """Two names, ratios 3:1 → first should get ~3× the second's shares
+    (modulo lot rounding)."""
+    shares = compute_target_shares(
+        target_names=["HI", "LO"],
+        prices={"HI": 100.0, "LO": 100.0},
+        total_nav=1_000_000,
+        max_positions=2,
+        weighting="ratio",
+        ratios={"HI": 3.0, "LO": 1.0},
+    )
+    # HI gets 3/4 of NAV (750K @ 100 = 7500 shares), LO gets 1/4 (2500)
+    assert shares["HI"] == 7500
+    assert shares["LO"] == 2500
+
+
+def test_ratio_weighting_handles_zero_total():
+    """If all ratios are zero/negative, every name gets 0 shares."""
+    shares = compute_target_shares(
+        target_names=["A", "B"],
+        prices={"A": 100.0, "B": 100.0},
+        total_nav=1_000_000,
+        max_positions=2,
+        weighting="ratio",
+        ratios={"A": 0, "B": 0},
+    )
+    assert shares == {"A": 0, "B": 0}
+
+
+def test_ratio_weighting_requires_ratios():
+    with pytest.raises(ValueError, match="requires ratios"):
+        compute_target_shares(
+            target_names=["A"],
+            prices={"A": 100.0},
+            total_nav=1_000_000,
+            max_positions=1,
+            weighting="ratio",
+        )
+
+
+def test_unknown_weighting_raises():
+    with pytest.raises(ValueError, match="unknown weighting"):
+        compute_target_shares(
+            target_names=["A"],
+            prices={"A": 100.0},
+            total_nav=1_000_000,
+            max_positions=1,
+            weighting="other",
+        )
