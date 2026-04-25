@@ -167,3 +167,6 @@ parameters.json
 ./content/
 /financial_data/
 /financial_data_old/
+/financial_data_pg16/
+# airflow logs (kept out of git, mounted into container)
+/airflow/logs/
