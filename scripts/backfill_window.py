@@ -170,7 +170,15 @@ def step_prices(engine, jq: JQuantsClient, d: date) -> int:
     quotes = jq.daily_quotes(target_date=d)
     if quotes.empty:
         return 0
-    quotes = quotes.rename(columns={"Code": "ShokenCode", "C": "close", "Vo": "volume"})
+    quotes = quotes.rename(
+        columns={
+            "Code": "ShokenCode",
+            "C": "close",
+            "Vo": "volume",
+            "AdjC": "adj_close",
+            "AdjFactor": "adj_factor",
+        }
+    )
     quotes["ShokenCode"] = quotes["ShokenCode"].astype(str)
     quotes = quotes.dropna(subset=["close"])
 
@@ -185,7 +193,11 @@ def step_prices(engine, jq: JQuantsClient, d: date) -> int:
         ).fetchall()
     shares = pd.DataFrame(rows, columns=["ShokenCode", "issued_shares"])
 
-    merged = quotes[["ShokenCode", "close", "volume"]].merge(shares, on="ShokenCode", how="left")
+    cols = ["ShokenCode", "close", "volume"]
+    for c in ("adj_close", "adj_factor"):
+        if c in quotes.columns:
+            cols.append(c)
+    merged = quotes[cols].merge(shares, on="ShokenCode", how="left")
     merged["Date"] = d
     merged["marketCap"] = (
         merged["close"].astype("float64") * merged["issued_shares"].astype("float64")
@@ -200,14 +212,25 @@ def step_prices(engine, jq: JQuantsClient, d: date) -> int:
                 "close": float(r["close"]) if pd.notna(r["close"]) else None,
                 "volume": int(r["volume"]) if pd.notna(r["volume"]) else None,
                 "marketCap": int(r["marketCap"]) if pd.notna(r["marketCap"]) else None,
+                "adj_close": float(r["adj_close"])
+                if "adj_close" in merged.columns and pd.notna(r["adj_close"])
+                else None,
+                "adj_factor": float(r["adj_factor"])
+                if "adj_factor" in merged.columns and pd.notna(r["adj_factor"])
+                else None,
             }
         )
     sql = text(
         """
-        INSERT INTO t_daily_stock_perf ("Date","ShokenCode",close,volume,"marketCap")
-        VALUES (:Date,:ShokenCode,:close,:volume,:marketCap)
+        INSERT INTO t_daily_stock_perf
+            ("Date","ShokenCode",close,volume,"marketCap",adj_close,adj_factor)
+        VALUES (:Date,:ShokenCode,:close,:volume,:marketCap,:adj_close,:adj_factor)
         ON CONFLICT ("Date","ShokenCode") DO UPDATE SET
-          close=EXCLUDED.close, volume=EXCLUDED.volume, "marketCap"=EXCLUDED."marketCap"
+          close=EXCLUDED.close,
+          volume=EXCLUDED.volume,
+          "marketCap"=EXCLUDED."marketCap",
+          adj_close=EXCLUDED.adj_close,
+          adj_factor=EXCLUDED.adj_factor
         """
     )
     with engine.begin() as conn:
