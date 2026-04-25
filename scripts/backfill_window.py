@@ -1,17 +1,30 @@
-"""Run the full daily pipeline (doclist → xbrl → prices → screen → sim)
-across a date window, in dependency order.
+"""Run the daily pipeline across a date window, optionally one phase
+at a time.
 
 Same business logic as the Airflow DAGs (re-uses everything in src/),
-just driven from a single process instead of via airflow scheduler.
-Idempotent — every step upserts or deletes-then-rewrites for its date,
-so a partial run can be re-launched safely.
+just driven from a single process. Idempotent — every step upserts or
+deletes-then-rewrites for its date, so a partial run can be re-launched.
 
 Usage:
+    # Full pipeline (doclist → xbrl → prices → screen → sim)
     python scripts/backfill_window.py 2026-04-15 2026-04-22
+
+    # Single phase only — useful for the 12-month bootstrap where
+    # prices and financials want different runtime characteristics.
+    python scripts/backfill_window.py 2025-04-25 2026-04-24 --phase=prices
+    python scripts/backfill_window.py 2025-04-25 2026-04-24 --phase=financials
+    python scripts/backfill_window.py 2025-04-25 2026-04-24 --phase=marketcap
+
+Phases:
+    prices        per date: step_prices only. Skips weekends.
+    financials    per date: step_doclist + step_xbrl_ingest.
+    marketcap     once: UPDATE marketCap from latest known issued_shares.
+    all (default) per date: everything (current behavior).
 """
 
 from __future__ import annotations
 
+import argparse
 import sys
 import tempfile
 from datetime import date, datetime, timedelta
@@ -280,50 +293,102 @@ def step_sim(engine, d: date) -> dict[str, dict]:
     return {s.name: step_sim_one(engine, d, s, qual) for s in STRATEGIES}
 
 
-def main():
-    if len(sys.argv) != 3:
-        print("usage: backfill_window.py START END", file=sys.stderr)
-        sys.exit(1)
-    start = datetime.strptime(sys.argv[1], "%Y-%m-%d").date()
-    end = datetime.strptime(sys.argv[2], "%Y-%m-%d").date()
+def step_recompute_marketcap(engine) -> int:
+    """Fill in NULL marketCap on t_daily_stock_perf using the most recent
+    known issued_shares per company. Single SQL UPDATE; safe to re-run.
 
+    Use after a prices-only backfill once t_financials_annual has been
+    populated by a financials backfill — historical price rows that
+    were inserted before any annual report had been ingested for the
+    company will have marketCap=NULL and need this fix-up pass.
+    """
+    sql = text(
+        """
+        UPDATE t_daily_stock_perf p
+        SET "marketCap" = (p.close * fa.issued_shares)::bigint
+        FROM (
+            SELECT DISTINCT ON ("secCode") "secCode", issued_shares
+            FROM t_financials_annual
+            WHERE issued_shares IS NOT NULL
+            ORDER BY "secCode", period_end DESC
+        ) fa
+        WHERE p."ShokenCode" = fa."secCode"
+          AND p."marketCap" IS NULL
+          AND p.close IS NOT NULL
+        """
+    )
+    with engine.begin() as conn:
+        result = conn.execute(sql)
+    return result.rowcount or 0
+
+
+def _run_phase_per_date(phase: str, start: date, end: date) -> None:
     engine = db.get_engine()
-    edinet_key = config.edinet_key()
-    jq = JQuantsClient(config.jquants_api_key())
+    edinet_key = config.edinet_key() if phase in ("financials", "all") else None
+    jq = JQuantsClient(config.jquants_api_key()) if phase in ("prices", "all") else None
 
     for d in daterange(start, end):
         print(f"\n=== {d} ({d.strftime('%a')}) ===")
-        try:
-            n_doc = step_doclist(engine, edinet_key, d)
-            print(f"  doclist:  {n_doc} filings")
-            n_filings, n_facts, n_mart = step_xbrl_ingest(engine, edinet_key, d)
-            print(f"  xbrl:     {n_filings} parsed, {n_facts} facts, {n_mart} mart rows")
-        except Exception as e:
-            print(f"  [error] EDINET step failed: {type(e).__name__}: {e}")
-            continue
 
-        # Skip price/screen/sim on weekends — JQuants returns nothing.
+        if phase in ("financials", "all"):
+            try:
+                n_doc = step_doclist(engine, edinet_key, d)
+                print(f"  doclist:  {n_doc} filings")
+                n_filings, n_facts, n_mart = step_xbrl_ingest(engine, edinet_key, d)
+                print(f"  xbrl:     {n_filings} parsed, {n_facts} facts, {n_mart} mart rows")
+            except Exception as e:
+                print(f"  [error] EDINET step failed: {type(e).__name__}: {e}")
+                if phase == "all":
+                    continue
+
         if d.weekday() >= 5:
-            print("  (weekend — skipping prices/screen/sim)")
+            if phase in ("prices", "all"):
+                print("  (weekend — skipping prices/screen/sim)")
             continue
 
-        try:
-            n_q = step_prices(engine, jq, d)
-            print(f"  prices:   {n_q} quotes")
-            if n_q == 0:
-                print("  (no prices — skipping screen/sim)")
-                continue
-            n_scored, n_qual = step_screen(engine, d)
-            print(f"  screen:   {n_scored} scored, {n_qual} qualify")
-            results = step_sim(engine, d)
-            for name, r in results.items():
-                print(
-                    f"  sim[{name:<32}]: {r['n_positions']:>2} pos, "
-                    f"{r['n_trades']:>2} tx, NAV={r['nav']:>15,.0f}"
-                )
-        except Exception as e:
-            print(f"  [error] prices/screen/sim failed: {type(e).__name__}: {e}")
+        if phase in ("prices", "all"):
+            try:
+                n_q = step_prices(engine, jq, d)
+                print(f"  prices:   {n_q} quotes")
+                if phase == "prices":
+                    continue
+                if n_q == 0:
+                    print("  (no prices — skipping screen/sim)")
+                    continue
+                n_scored, n_qual = step_screen(engine, d)
+                print(f"  screen:   {n_scored} scored, {n_qual} qualify")
+                results = step_sim(engine, d)
+                for name, r in results.items():
+                    print(
+                        f"  sim[{name:<32}]: {r['n_positions']:>2} pos, "
+                        f"{r['n_trades']:>2} tx, NAV={r['nav']:>15,.0f}"
+                    )
+            except Exception as e:
+                print(f"  [error] prices/screen/sim failed: {type(e).__name__}: {e}")
 
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("start", help="window start date (YYYY-MM-DD)")
+    parser.add_argument("end", help="window end date (YYYY-MM-DD, inclusive)")
+    parser.add_argument(
+        "--phase",
+        choices=("prices", "financials", "marketcap", "all"),
+        default="all",
+        help="which step(s) to run; default 'all' = full pipeline per date",
+    )
+    args = parser.parse_args()
+
+    start = datetime.strptime(args.start, "%Y-%m-%d").date()
+    end = datetime.strptime(args.end, "%Y-%m-%d").date()
+
+    if args.phase == "marketcap":
+        engine = db.get_engine()
+        n = step_recompute_marketcap(engine)
+        print(f"marketcap recompute: updated {n} rows in t_daily_stock_perf")
+        return
+
+    _run_phase_per_date(args.phase, start, end)
     print("\nbackfill complete.")
 
 
