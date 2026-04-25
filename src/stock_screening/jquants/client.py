@@ -49,7 +49,13 @@ class JQuantsClient:
             params={"refreshtoken": self._refresh_token},
             timeout=30,
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            # Re-raise without the URL — JQuants accepts the refresh token as
+            # a query param, so resp.url contains the secret.
+            raise requests.HTTPError(
+                f"jquants auth_refresh returned {resp.status_code}: "
+                f"{resp.text[:200]}"
+            )
         token = resp.json()["idToken"]
         self._id_token = token
         self._id_token_expires_at = time.time() + ID_TOKEN_TTL_SECONDS

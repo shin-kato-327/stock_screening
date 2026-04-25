@@ -37,12 +37,18 @@ CONCEPTS: tuple[ConceptMap, ...] = (
     ),
     ConceptMap(
         field_name="short_term_borrowings",
-        concept_ids=("jppfs_cor:ShortTermLoansPayable",),
+        concept_ids=(
+            "jppfs_cor:ShortTermLoansPayable",
+            "jppfs_cor:ShortTermBorrowings",
+        ),
         labels=("短期借入金",),
     ),
     ConceptMap(
         field_name="long_term_borrowings",
-        concept_ids=("jppfs_cor:LongTermLoansPayable",),
+        concept_ids=(
+            "jppfs_cor:LongTermLoansPayable",
+            "jppfs_cor:LongTermBorrowings",
+        ),
         labels=("長期借入金",),
     ),
     ConceptMap(
@@ -68,21 +74,33 @@ CONCEPTS: tuple[ConceptMap, ...] = (
     ),
     ConceptMap(
         field_name="total_liabilities",
-        concept_ids=("jppfs_cor:Liabilities",),
+        concept_ids=(
+            "jppfs_cor:Liabilities",
+            "jpcrp_cor:LiabilitiesSummaryOfBusinessResults",
+        ),
         labels=("負債合計",),
     ),
     ConceptMap(
         field_name="total_assets",
-        concept_ids=("jppfs_cor:Assets",),
-        labels=("資産合計",),
+        # The Summary form reports the consolidated total in the 5-year
+        # highlights table; many filings emit it instead of (or in addition
+        # to) jppfs_cor:Assets in the consolidated balance sheet.
+        concept_ids=(
+            "jppfs_cor:Assets",
+            "jpcrp_cor:TotalAssetsSummaryOfBusinessResults",
+        ),
+        labels=("資産合計", "総資産額"),
     ),
     ConceptMap(
         field_name="issued_shares",
+        # Verified against real filings — this is the concept used in
+        # 有報's "shares issued / voting rights" section. Total issued
+        # shares ≈ voting-rights shares for the vast majority of TSE
+        # filers (companies with large non-voting tranches are rare).
         concept_ids=(
-            "jpcrp_cor:TotalNumberOfIssuedSharesSummaryOfBusinessResults",
-            "jpcrp_cor:NumberOfIssuedAndOutstandingSharesAtTheEndOfFiscalYearTotalNumberOfShares",
+            "jpcrp_cor:NumberOfSharesIssuedSharesVotingRights",
         ),
-        labels=("発行済株式総数", "発行済株式総数(普通株式)"),
+        labels=("株式数（株）", "発行済株式総数"),
     ),
 )
 
