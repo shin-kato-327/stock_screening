@@ -47,32 +47,40 @@ def select_target_names(
     if qualifying.empty:
         return []
 
-    df = qualifying[["sec_code", "ratio"]].sort_values("ratio", ascending=False).reset_index(
-        drop=True
-    )
-    qualifying_set = set(df["sec_code"])
-    held = [c for c in current if c in qualifying_set]
-    held_ratios = dict(zip(df["sec_code"], df["ratio"], strict=True))
+    df = qualifying[["sec_code", "ratio"]].sort_values(
+        "ratio", ascending=False
+    ).reset_index(drop=True)
+    ratios = dict(zip(df["sec_code"], df["ratio"], strict=True))
 
-    if len(held) >= max_positions:
-        held_sorted = sorted(held, key=lambda c: held_ratios[c], reverse=True)
-        return held_sorted[:max_positions]
+    held_qualifying = [c for c in current if c in ratios]
+    chosen = list(held_qualifying)
 
-    held_set = set(held)
-    candidates = df[~df["sec_code"].isin(held_set)].reset_index(drop=True)
+    candidates = [c for c in df["sec_code"] if c not in set(chosen)]
 
-    if not held:
-        # Bootstrap: just take top-N.
-        return df["sec_code"].head(max_positions).tolist()
+    # Fill open slots first — drops in qualifying universe shouldn't be
+    # blocked by the strict-improvement rule.
+    while len(chosen) < max_positions and candidates:
+        chosen.append(candidates.pop(0))
 
-    weakest_held_ratio = min(held_ratios[c] for c in held) if held else float("-inf")
-    slots = max_positions - len(held)
-    promoted = [
-        row.sec_code for row in candidates.itertuples()
-        if row.ratio > weakest_held_ratio
-    ][:slots]
+    # If still over max (shouldn't happen unless current > max), trim worst.
+    if len(chosen) > max_positions:
+        chosen.sort(key=lambda c: ratios[c], reverse=True)
+        chosen = chosen[:max_positions]
 
-    return held + promoted
+    # Strict-improvement swap: replace the weakest chosen with the next
+    # candidate iff candidate's ratio is STRICTLY greater. Equal ratios
+    # don't swap — that's the anti-thrashing guarantee.
+    while candidates:
+        cand = candidates[0]
+        weakest = min(chosen, key=lambda c: ratios[c])
+        if ratios[cand] > ratios[weakest]:
+            chosen.remove(weakest)
+            chosen.append(cand)
+            candidates.pop(0)
+        else:
+            break  # df is sorted desc; nothing below will improve either
+
+    return chosen
 
 
 def compute_target_shares(
