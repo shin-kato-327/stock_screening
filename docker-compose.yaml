@@ -1,33 +1,35 @@
-version: '3.8'
-
 services:
   pgdatabase:
-    image: postgres:13
+    image: postgres:16-alpine
     environment:
-      - POSTGRES_USER=root
-      - POSTGRES_PASSWORD=root
-      - POSTGRES_DB=financial_data
+      POSTGRES_USER: ${POSTGRES_USER:-root}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-financial_data}
     volumes:
-      - "./financial_data:/var/lib/postgresql/data:rw"
+      # New volume name; the legacy ./financial_data (pg13) directory remains untouched as a rollback.
+      - "./financial_data_pg16:/var/lib/postgresql/data:rw"
     ports:
       - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-root} -d ${POSTGRES_DB:-financial_data}"]
+      interval: 5s
+      retries: 10
     networks:
-      - pg_network
       - financial_network
 
   pgadmin:
     image: dpage/pgadmin4
     environment:
-      - PGADMIN_DEFAULT_EMAIL=admin@admin.com
-      - PGADMIN_DEFAULT_PASSWORD=root
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:?PGADMIN_PASSWORD must be set in .env}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
     ports:
       - "8080:80"
+    depends_on:
+      - pgdatabase
     networks:
-      - pg_network
+      - financial_network
 
 networks:
-  pg_network:
-    driver: bridge
   financial_network:
     name: financial_network
-    external: true
