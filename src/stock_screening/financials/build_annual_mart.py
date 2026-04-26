@@ -24,15 +24,21 @@ MART_FIELDS = tuple(cm.field_name for cm in CONCEPTS)
 
 
 def _fetch_latest_facts_for_doc(engine: Engine, doc_id: str) -> list[dict]:
-    """Return every CurrentYearInstant fact for a doc — these are the
-    balance-sheet line items the screen cares about."""
+    """Return every CurrentYear* fact for a doc.
+
+    Includes both Instant (balance-sheet snapshots) and Duration (income-
+    statement flows). Duration facts have a period_start AND period_end;
+    for an annual filing, period_end matches the balance-sheet date, so
+    income-statement items collapse onto the same mart row as the
+    balance-sheet items.
+    """
     sql = text(
         """
         SELECT "docID" AS doc_id, "itemName" AS item_name, amount,
                "periodEnd" AS period_end, concept_id
         FROM t_financials
         WHERE "docID" = :doc_id
-          AND "categoryID" = 'CurrentYearInstant'
+          AND "categoryID" IN ('CurrentYearInstant', 'CurrentYearDuration')
         """
     )
     with engine.connect() as conn:

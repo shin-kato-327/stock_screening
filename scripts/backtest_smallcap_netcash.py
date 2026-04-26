@@ -59,7 +59,7 @@ _SCREEN_SQL = text(
         SELECT fa."secCode" AS sec_code,
                fa.period_end,
                fa.current_assets,
-               fa.interest_bearing_debt,
+               fa.total_liabilities,
                fa.investment_securities
         FROM t_financials_annual fa
         JOIN t_doc_list dl ON dl."docID" = fa.source_doc_id
@@ -67,12 +67,12 @@ _SCREEN_SQL = text(
     ),
     latest AS (
         SELECT DISTINCT ON (sec_code) sec_code, period_end,
-               current_assets, interest_bearing_debt, investment_securities
+               current_assets, total_liabilities, investment_securities
         FROM visible
         ORDER BY sec_code, period_end DESC
     )
     SELECT l.sec_code,
-           l.current_assets, l.interest_bearing_debt, l.investment_securities,
+           l.current_assets, l.total_liabilities, l.investment_securities,
            d."marketCap" AS market_cap,
            d.adj_close,
            d.volume
@@ -99,17 +99,17 @@ def screen(engine, run_date: date) -> pd.DataFrame:
             },
         ).fetchall()
     cols = [
-        "sec_code", "current_assets", "interest_bearing_debt",
+        "sec_code", "current_assets", "total_liabilities",
         "investment_securities", "market_cap", "adj_close", "volume",
     ]
     df = pd.DataFrame(rows, columns=cols)
     if df.empty:
         return df.assign(ratio=pd.Series(dtype=float), qualifies=pd.Series(dtype=bool))
-    for c in ("current_assets", "interest_bearing_debt", "investment_securities", "market_cap", "adj_close"):
+    for c in ("current_assets", "total_liabilities", "investment_securities", "market_cap", "adj_close"):
         df[c] = df[c].astype(float)
     df["ratio"] = (
         df["current_assets"].fillna(0)
-        - df["interest_bearing_debt"].fillna(0)
+        - df["total_liabilities"].fillna(0)
         + INVESTMENT_SECURITIES_HAIRCUT * df["investment_securities"].fillna(0)
     ) / df["market_cap"]
     df["qualifies"] = df["ratio"] >= QUALIFY_THRESHOLD
