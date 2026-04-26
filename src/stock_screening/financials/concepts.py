@@ -92,6 +92,30 @@ CONCEPTS: tuple[ConceptMap, ...] = (
         labels=("資産合計", "総資産額"),
     ),
     ConceptMap(
+        field_name="net_sales",
+        # CurrentYearDuration income-statement fact (top line). Used by
+        # the turnaround signal alongside operating_income to distinguish
+        # revenue-growing recoveries from cost-cut-only "fake" turnarounds.
+        concept_ids=(
+            "jpcrp_cor:NetSalesSummaryOfBusinessResults",
+            "jppfs_cor:NetSales",
+        ),
+        labels=("売上高",),
+    ),
+    ConceptMap(
+        field_name="operating_income",
+        # CurrentYearDuration income-statement fact. Used by the screen
+        # to filter for "solid profitability" alongside net-cash level.
+        # The Summary form is in the 5-year highlights table; the
+        # consolidated statement of operations form is preferred when
+        # both are emitted (mart pivot picks the larger absolute value).
+        concept_ids=(
+            "jpcrp_cor:OperatingIncomeSummaryOfBusinessResults",
+            "jppfs_cor:OperatingIncome",
+        ),
+        labels=("営業利益", "営業利益又は営業損失（△）"),
+    ),
+    ConceptMap(
         field_name="issued_shares",
         # Verified against real filings — this is the concept used in
         # 有報's "shares issued / voting rights" section. Total issued

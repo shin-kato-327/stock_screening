@@ -40,4 +40,4 @@ def test_debt_components_match_concepts():
 def test_no_label_collisions():
     """Labels shouldn't map to multiple fields silently — that would
     produce non-deterministic mart projection."""
-    assert len(CONCEPT_BY_LABEL) >= len({l for l in CONCEPT_BY_LABEL.keys()})
+    assert len(CONCEPT_BY_LABEL) >= len({lbl for lbl in CONCEPT_BY_LABEL.keys()})

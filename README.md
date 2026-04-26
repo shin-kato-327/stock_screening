@@ -4,9 +4,10 @@ Daily Japan-equity value screener and paper-trading simulator.
 
 The pipeline pulls financial reports from EDINET, parses XBRL, ingests
 into Postgres, pulls daily prices from JQuants, ranks stocks by the
-**net-cash ratio** `(流動資産 − 有利子負債 + 0.7 × 投資有価証券) ÷ 時価総額`
-(a market-cap-based version of the canonical Japanese
-ネットキャッシュ比率), and runs an equal-weight top-N paper portfolio
+**net-cash ratio** `(流動資産 − 負債合計 + 0.7 × 投資有価証券) ÷ 時価総額`
+(a market-cap-based, conservative form — uses total liabilities, not
+just interest-bearing debt; see `screening/metrics.py` for the
+empirical justification), and runs an equal-weight top-N paper portfolio
 that rebalances daily with a strict-improvement swap rule against a
 TOPIX (`1306.T`) buy-and-hold benchmark.
 

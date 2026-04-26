@@ -34,15 +34,19 @@ class Trade:
 
 
 def select_target_names(
-    qualifying: pd.DataFrame, current: Sequence[str], max_positions: int
+    qualifying: pd.DataFrame,
+    current: Sequence[str],
+    max_positions: int,
+    swap_rule: str = "strict_improvement",
 ) -> list[str]:
     """Pick which names to hold tomorrow.
 
-    qualifying: columns sec_code, ratio (sorted or not, both fine).
-    current: sec_codes held today.
-    Rule: keep current names that still qualify; fill remaining slots
-    with non-held names that have a strictly better ratio than the
-    weakest held name. Preserves stability.
+    swap_rule:
+      'strict_improvement' — keep held names that qualify; fill open
+        slots with top non-held; only displace a held name when a
+        non-held has a STRICTLY better ratio (anti-thrashing).
+      'full_rebalance' — ignore current holdings; target = top N by
+        ratio. Higher turnover; surfaces noise vs signal in costs.
     """
     if qualifying.empty:
         return []
@@ -50,26 +54,25 @@ def select_target_names(
     df = qualifying[["sec_code", "ratio"]].sort_values(
         "ratio", ascending=False
     ).reset_index(drop=True)
-    ratios = dict(zip(df["sec_code"], df["ratio"], strict=True))
 
+    if swap_rule == "full_rebalance":
+        return df["sec_code"].head(max_positions).tolist()
+
+    if swap_rule != "strict_improvement":
+        raise ValueError(f"unknown swap_rule: {swap_rule}")
+
+    ratios = dict(zip(df["sec_code"], df["ratio"], strict=True))
     held_qualifying = [c for c in current if c in ratios]
     chosen = list(held_qualifying)
-
     candidates = [c for c in df["sec_code"] if c not in set(chosen)]
 
-    # Fill open slots first — drops in qualifying universe shouldn't be
-    # blocked by the strict-improvement rule.
     while len(chosen) < max_positions and candidates:
         chosen.append(candidates.pop(0))
 
-    # If still over max (shouldn't happen unless current > max), trim worst.
     if len(chosen) > max_positions:
         chosen.sort(key=lambda c: ratios[c], reverse=True)
         chosen = chosen[:max_positions]
 
-    # Strict-improvement swap: replace the weakest chosen with the next
-    # candidate iff candidate's ratio is STRICTLY greater. Equal ratios
-    # don't swap — that's the anti-thrashing guarantee.
     while candidates:
         cand = candidates[0]
         weakest = min(chosen, key=lambda c: ratios[c])
@@ -78,7 +81,7 @@ def select_target_names(
             chosen.append(cand)
             candidates.pop(0)
         else:
-            break  # df is sorted desc; nothing below will improve either
+            break
 
     return chosen
 
@@ -88,24 +91,48 @@ def compute_target_shares(
     prices: dict[str, float],
     total_nav: float,
     max_positions: int,
+    weighting: str = "equal",
+    ratios: dict[str, float] | None = None,
     lot_size: int = LOT_SIZE,
 ) -> dict[str, int]:
-    """Equal-weight sizing. NAV split evenly across max_positions slots
-    (so adding a name later doesn't dilute existing ones); shares per
-    name rounded down to lot_size.
+    """Compute target share counts per target name.
+
+    weighting:
+      'equal' — NAV split evenly across max_positions slots, so adding
+        a name later doesn't dilute existing ones (the un-allocated
+        slots' worth sits in cash).
+      'ratio' — weights proportional to (ratio_i / Σ ratios).
+        Requires `ratios` keyed by sec_code; concentrates capital in
+        the highest-conviction names. Total deployed capital ≈ NAV
+        regardless of how many names actually qualify.
+
+    All shares rounded down to lot_size.
     """
     if not target_names:
         return {}
-    slot_value = total_nav / max_positions
+
+    if weighting == "equal":
+        slot_value = total_nav / max_positions
+        slot_for: dict[str, float] = {n: slot_value for n in target_names}
+    elif weighting == "ratio":
+        if ratios is None:
+            raise ValueError("weighting='ratio' requires ratios dict")
+        weights = {n: max(ratios.get(n, 0), 0) for n in target_names}
+        total_w = sum(weights.values())
+        if total_w <= 0:
+            return {n: 0 for n in target_names}
+        slot_for = {n: total_nav * (w / total_w) for n, w in weights.items()}
+    else:
+        raise ValueError(f"unknown weighting: {weighting}")
+
     shares: dict[str, int] = {}
     for name in target_names:
         p = prices.get(name)
         if not p or p <= 0:
             shares[name] = 0
             continue
-        raw = int(slot_value // p)
-        rounded = (raw // lot_size) * lot_size
-        shares[name] = rounded
+        raw = int(slot_for[name] // p)
+        shares[name] = (raw // lot_size) * lot_size
     return shares
 
 

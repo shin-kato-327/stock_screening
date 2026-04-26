@@ -16,9 +16,17 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Categories we care about. CurrentYear* is the filer's reported period
-# (vs PriorYear* for the comparative).
-RELEVANT_CATEGORIES = ("CurrentYearDuration", "CurrentYearInstant")
+# Categories we care about. CurrentYear* is the filer's reported period;
+# Prior1Year* is the comparative shown alongside in the same filing —
+# free prior-year data that lets the mart build trend metrics
+# (op income YoY, sales YoY, margin change) without needing the
+# previous year's actual filing in our doclist.
+RELEVANT_CATEGORIES = (
+    "CurrentYearDuration",
+    "CurrentYearInstant",
+    "Prior1YearDuration",
+    "Prior1YearInstant",
+)
 
 
 @dataclass

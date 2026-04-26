@@ -3,6 +3,8 @@ persist_screen_results) covered by the migration smoke test in phase 11."""
 
 from stock_screening.screening.metrics import (
     INVESTMENT_SECURITIES_HAIRCUT,
+    MOMENTUM_THRESHOLD,
+    OP_YIELD_THRESHOLD,
     QUALIFY_THRESHOLD,
 )
 
@@ -21,10 +23,23 @@ def test_investment_securities_haircut_is_70_percent():
 
 
 def test_formula_components_and_threshold_match_plan():
-    """Sanity: ratio = (current_assets - interest_bearing_debt
+    """Sanity: ratio = (current_assets - total_liabilities
                       + 0.7*investment_securities) / market_cap.
-    A company with current_assets=100, debt=20, sec=10, mc=87 → ratio
-    = (100 - 20 + 7) / 87 = 1.0 → just qualifies."""
+    A company with current_assets=100, total_liabilities=20, sec=10, mc=87
+    → ratio = (100 - 20 + 7) / 87 = 1.0 → just qualifies. The choice
+    of total_liabilities vs interest_bearing_debt is justified in
+    metrics.py module docstring (empirical Q5-collapse fix)."""
     ratio = (100 - 20 + INVESTMENT_SECURITIES_HAIRCUT * 10) / 87
     assert ratio == 1.0
     assert ratio >= QUALIFY_THRESHOLD
+
+
+def test_quality_filter_constants():
+    """Document the value-trap-filter thresholds. Tuned from the 2022
+    cohort 3-year analysis (cross_table_netcash_2022.py)."""
+    # Operating-income yield > 5% caught 3 of 5 worst traps at the
+    # cost of one turnaround winner.
+    assert OP_YIELD_THRESHOLD == 0.05
+    # Modest "market is starting to price it in" filter — also catches
+    # pieces of the trap pattern.
+    assert MOMENTUM_THRESHOLD == 0.0

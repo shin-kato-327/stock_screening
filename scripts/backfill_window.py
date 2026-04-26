@@ -1,17 +1,30 @@
-"""Run the full daily pipeline (doclist → xbrl → prices → screen → sim)
-across a date window, in dependency order.
+"""Run the daily pipeline across a date window, optionally one phase
+at a time.
 
 Same business logic as the Airflow DAGs (re-uses everything in src/),
-just driven from a single process instead of via airflow scheduler.
-Idempotent — every step upserts or deletes-then-rewrites for its date,
-so a partial run can be re-launched safely.
+just driven from a single process. Idempotent — every step upserts or
+deletes-then-rewrites for its date, so a partial run can be re-launched.
 
 Usage:
+    # Full pipeline (doclist → xbrl → prices → screen → sim)
     python scripts/backfill_window.py 2026-04-15 2026-04-22
+
+    # Single phase only — useful for the 12-month bootstrap where
+    # prices and financials want different runtime characteristics.
+    python scripts/backfill_window.py 2025-04-25 2026-04-24 --phase=prices
+    python scripts/backfill_window.py 2025-04-25 2026-04-24 --phase=financials
+    python scripts/backfill_window.py 2025-04-25 2026-04-24 --phase=marketcap
+
+Phases:
+    prices        per date: step_prices only. Skips weekends.
+    financials    per date: step_doclist + step_xbrl_ingest.
+    marketcap     once: UPDATE marketCap from latest known issued_shares.
+    all (default) per date: everything (current behavior).
 """
 
 from __future__ import annotations
 
+import argparse
 import sys
 import tempfile
 from datetime import date, datetime, timedelta
@@ -38,6 +51,7 @@ from stock_screening.simulation.rebalance import (
     generate_trades,
     select_target_names,
 )
+from stock_screening.simulation.strategies import STRATEGIES, Strategy
 
 
 def daterange(start: date, end: date):
@@ -156,7 +170,15 @@ def step_prices(engine, jq: JQuantsClient, d: date) -> int:
     quotes = jq.daily_quotes(target_date=d)
     if quotes.empty:
         return 0
-    quotes = quotes.rename(columns={"Code": "ShokenCode", "C": "close", "Vo": "volume"})
+    quotes = quotes.rename(
+        columns={
+            "Code": "ShokenCode",
+            "C": "close",
+            "Vo": "volume",
+            "AdjC": "adj_close",
+            "AdjFactor": "adj_factor",
+        }
+    )
     quotes["ShokenCode"] = quotes["ShokenCode"].astype(str)
     quotes = quotes.dropna(subset=["close"])
 
@@ -171,7 +193,11 @@ def step_prices(engine, jq: JQuantsClient, d: date) -> int:
         ).fetchall()
     shares = pd.DataFrame(rows, columns=["ShokenCode", "issued_shares"])
 
-    merged = quotes[["ShokenCode", "close", "volume"]].merge(shares, on="ShokenCode", how="left")
+    cols = ["ShokenCode", "close", "volume"]
+    for c in ("adj_close", "adj_factor"):
+        if c in quotes.columns:
+            cols.append(c)
+    merged = quotes[cols].merge(shares, on="ShokenCode", how="left")
     merged["Date"] = d
     merged["marketCap"] = (
         merged["close"].astype("float64") * merged["issued_shares"].astype("float64")
@@ -186,14 +212,25 @@ def step_prices(engine, jq: JQuantsClient, d: date) -> int:
                 "close": float(r["close"]) if pd.notna(r["close"]) else None,
                 "volume": int(r["volume"]) if pd.notna(r["volume"]) else None,
                 "marketCap": int(r["marketCap"]) if pd.notna(r["marketCap"]) else None,
+                "adj_close": float(r["adj_close"])
+                if "adj_close" in merged.columns and pd.notna(r["adj_close"])
+                else None,
+                "adj_factor": float(r["adj_factor"])
+                if "adj_factor" in merged.columns and pd.notna(r["adj_factor"])
+                else None,
             }
         )
     sql = text(
         """
-        INSERT INTO t_daily_stock_perf ("Date","ShokenCode",close,volume,"marketCap")
-        VALUES (:Date,:ShokenCode,:close,:volume,:marketCap)
+        INSERT INTO t_daily_stock_perf
+            ("Date","ShokenCode",close,volume,"marketCap",adj_close,adj_factor)
+        VALUES (:Date,:ShokenCode,:close,:volume,:marketCap,:adj_close,:adj_factor)
         ON CONFLICT ("Date","ShokenCode") DO UPDATE SET
-          close=EXCLUDED.close, volume=EXCLUDED.volume, "marketCap"=EXCLUDED."marketCap"
+          close=EXCLUDED.close,
+          volume=EXCLUDED.volume,
+          "marketCap"=EXCLUDED."marketCap",
+          adj_close=EXCLUDED.adj_close,
+          adj_factor=EXCLUDED.adj_factor
         """
     )
     with engine.begin() as conn:
@@ -208,23 +245,15 @@ def step_screen(engine, d: date) -> tuple[int, int]:
     return len(df), n_qual
 
 
-def step_sim(engine, d: date) -> dict:
-    portfolio.delete_outputs_for_date(engine, d)
-    prev = portfolio.load_previous_snapshot(engine, d)
-
-    with engine.connect() as conn:
-        qrows = conn.execute(
-            text(
-                'SELECT "secCode" AS sec_code, ratio FROM t_screen_results '
-                "WHERE run_date=:d AND qualifies=TRUE ORDER BY ratio DESC"
-            ),
-            {"d": d},
-        ).fetchall()
-    qual = pd.DataFrame(qrows, columns=["sec_code", "ratio"])
+def step_sim_one(engine, d: date, strategy: Strategy, qual: pd.DataFrame) -> dict:
+    portfolio.delete_outputs_for_date(engine, d, strategy.name)
+    prev = portfolio.load_previous_snapshot(engine, d, strategy.name)
 
     if prev is None:
-        cash = float(config.initial_capital())
-        positions = pd.DataFrame(columns=["secCode", "shares", "avg_cost", "last_price", "market_value"])
+        cash = float(strategy.initial_capital)
+        positions = pd.DataFrame(
+            columns=["secCode", "shares", "avg_cost", "last_price", "market_value"]
+        )
     else:
         cash = prev.cash
         positions = prev.positions
@@ -235,19 +264,32 @@ def step_sim(engine, d: date) -> dict:
     nav_pre = cash + (float(marked["market_value"].sum()) if not marked.empty else 0.0)
 
     target_names = select_target_names(
-        qual, list(marked["secCode"]) if not marked.empty else [], config.max_positions()
+        qual,
+        list(marked["secCode"]) if not marked.empty else [],
+        strategy.max_positions,
+        swap_rule=strategy.swap_rule,
     )
-    target_shares = compute_target_shares(target_names, prices, nav_pre, config.max_positions())
+    ratios = dict(zip(qual["sec_code"], qual["ratio"], strict=True)) if not qual.empty else {}
+    target_shares = compute_target_shares(
+        target_names,
+        prices,
+        nav_pre,
+        strategy.max_positions,
+        weighting=strategy.weighting,
+        ratios=ratios,
+    )
     current_shares = (
         {row.secCode: int(row.shares) for row in marked.itertuples()}
         if not marked.empty
         else {}
     )
-    trades = generate_trades(current_shares, target_shares, prices, config.transaction_cost_bps())
+    trades = generate_trades(
+        current_shares, target_shares, prices, strategy.transaction_cost_bps
+    )
     new_positions, new_cash = portfolio.apply_trades(marked, trades, cash)
-    portfolio.persist_positions(engine, d, new_positions)
-    portfolio.persist_trades(engine, d, trades)
-    portfolio.persist_nav(engine, d, new_cash, new_positions, None)
+    portfolio.persist_positions(engine, d, new_positions, strategy.name)
+    portfolio.persist_trades(engine, d, trades, strategy.name)
+    portfolio.persist_nav(engine, d, new_cash, new_positions, None, strategy.name)
 
     pos_value = float(new_positions["market_value"].sum()) if not new_positions.empty else 0.0
     return {
@@ -257,49 +299,119 @@ def step_sim(engine, d: date) -> dict:
     }
 
 
-def main():
-    if len(sys.argv) != 3:
-        print("usage: backfill_window.py START END", file=sys.stderr)
-        sys.exit(1)
-    start = datetime.strptime(sys.argv[1], "%Y-%m-%d").date()
-    end = datetime.strptime(sys.argv[2], "%Y-%m-%d").date()
+def step_sim(engine, d: date) -> dict[str, dict]:
+    """Run every registered strategy for date `d`. They all read the
+    same screen output but maintain independent portfolios."""
+    with engine.connect() as conn:
+        qrows = conn.execute(
+            text(
+                'SELECT "secCode" AS sec_code, ratio FROM t_screen_results '
+                "WHERE run_date=:d AND qualifies=TRUE ORDER BY ratio DESC"
+            ),
+            {"d": d},
+        ).fetchall()
+    qual = pd.DataFrame(qrows, columns=["sec_code", "ratio"])
+    qual["ratio"] = qual["ratio"].astype(float)
 
+    return {s.name: step_sim_one(engine, d, s, qual) for s in STRATEGIES}
+
+
+def step_recompute_marketcap(engine) -> int:
+    """Fill in NULL marketCap on t_daily_stock_perf using the most recent
+    known issued_shares per company. Single SQL UPDATE; safe to re-run.
+
+    Use after a prices-only backfill once t_financials_annual has been
+    populated by a financials backfill — historical price rows that
+    were inserted before any annual report had been ingested for the
+    company will have marketCap=NULL and need this fix-up pass.
+    """
+    sql = text(
+        """
+        UPDATE t_daily_stock_perf p
+        SET "marketCap" = (p.close * fa.issued_shares)::bigint
+        FROM (
+            SELECT DISTINCT ON ("secCode") "secCode", issued_shares
+            FROM t_financials_annual
+            WHERE issued_shares IS NOT NULL
+            ORDER BY "secCode", period_end DESC
+        ) fa
+        WHERE p."ShokenCode" = fa."secCode"
+          AND p."marketCap" IS NULL
+          AND p.close IS NOT NULL
+        """
+    )
+    with engine.begin() as conn:
+        result = conn.execute(sql)
+    return result.rowcount or 0
+
+
+def _run_phase_per_date(phase: str, start: date, end: date) -> None:
     engine = db.get_engine()
-    edinet_key = config.edinet_key()
-    jq = JQuantsClient(config.jquants_api_key())
+    edinet_key = config.edinet_key() if phase in ("financials", "all") else None
+    jq = JQuantsClient(config.jquants_api_key()) if phase in ("prices", "all") else None
 
     for d in daterange(start, end):
         print(f"\n=== {d} ({d.strftime('%a')}) ===")
-        try:
-            n_doc = step_doclist(engine, edinet_key, d)
-            print(f"  doclist:  {n_doc} filings")
-            n_filings, n_facts, n_mart = step_xbrl_ingest(engine, edinet_key, d)
-            print(f"  xbrl:     {n_filings} parsed, {n_facts} facts, {n_mart} mart rows")
-        except Exception as e:
-            print(f"  [error] EDINET step failed: {type(e).__name__}: {e}")
-            continue
 
-        # Skip price/screen/sim on weekends — JQuants returns nothing.
+        if phase in ("financials", "all"):
+            try:
+                n_doc = step_doclist(engine, edinet_key, d)
+                print(f"  doclist:  {n_doc} filings")
+                n_filings, n_facts, n_mart = step_xbrl_ingest(engine, edinet_key, d)
+                print(f"  xbrl:     {n_filings} parsed, {n_facts} facts, {n_mart} mart rows")
+            except Exception as e:
+                print(f"  [error] EDINET step failed: {type(e).__name__}: {e}")
+                if phase == "all":
+                    continue
+
         if d.weekday() >= 5:
-            print("  (weekend — skipping prices/screen/sim)")
+            if phase in ("prices", "all"):
+                print("  (weekend — skipping prices/screen/sim)")
             continue
 
-        try:
-            n_q = step_prices(engine, jq, d)
-            print(f"  prices:   {n_q} quotes")
-            if n_q == 0:
-                print("  (no prices — skipping screen/sim)")
-                continue
-            n_scored, n_qual = step_screen(engine, d)
-            print(f"  screen:   {n_scored} scored, {n_qual} qualify")
-            sim = step_sim(engine, d)
-            print(
-                f"  sim:      {sim['n_positions']} positions, {sim['n_trades']} trades, "
-                f"NAV={sim['nav']:,.0f}"
-            )
-        except Exception as e:
-            print(f"  [error] prices/screen/sim failed: {type(e).__name__}: {e}")
+        if phase in ("prices", "all"):
+            try:
+                n_q = step_prices(engine, jq, d)
+                print(f"  prices:   {n_q} quotes")
+                if phase == "prices":
+                    continue
+                if n_q == 0:
+                    print("  (no prices — skipping screen/sim)")
+                    continue
+                n_scored, n_qual = step_screen(engine, d)
+                print(f"  screen:   {n_scored} scored, {n_qual} qualify")
+                results = step_sim(engine, d)
+                for name, r in results.items():
+                    print(
+                        f"  sim[{name:<32}]: {r['n_positions']:>2} pos, "
+                        f"{r['n_trades']:>2} tx, NAV={r['nav']:>15,.0f}"
+                    )
+            except Exception as e:
+                print(f"  [error] prices/screen/sim failed: {type(e).__name__}: {e}")
 
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("start", help="window start date (YYYY-MM-DD)")
+    parser.add_argument("end", help="window end date (YYYY-MM-DD, inclusive)")
+    parser.add_argument(
+        "--phase",
+        choices=("prices", "financials", "marketcap", "all"),
+        default="all",
+        help="which step(s) to run; default 'all' = full pipeline per date",
+    )
+    args = parser.parse_args()
+
+    start = datetime.strptime(args.start, "%Y-%m-%d").date()
+    end = datetime.strptime(args.end, "%Y-%m-%d").date()
+
+    if args.phase == "marketcap":
+        engine = db.get_engine()
+        n = step_recompute_marketcap(engine)
+        print(f"marketcap recompute: updated {n} rows in t_daily_stock_perf")
+        return
+
+    _run_phase_per_date(args.phase, start, end)
     print("\nbackfill complete.")
 
 
