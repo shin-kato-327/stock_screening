@@ -103,6 +103,23 @@ CONCEPTS: tuple[ConceptMap, ...] = (
         labels=("売上高",),
     ),
     ConceptMap(
+        field_name="net_income",
+        # Bottom-line profit attributable to parent shareholders. Used
+        # by the screen as the denominator of PER (株価収益率) =
+        # market_cap / net_income.
+        concept_ids=(
+            "jpcrp_cor:ProfitLossAttributableToOwnersOfParentSummaryOfBusinessResults",
+            "jppfs_cor:ProfitLossAttributableToOwnersOfParent",
+            "jpcrp_cor:ProfitLossAttributableToOwnersOfParent",
+        ),
+        labels=(
+            "親会社株主に帰属する当期純利益",
+            "親会社の所有者に帰属する当期利益",
+            "親会社株主に帰属する当期純利益又は親会社株主に帰属する当期純損失（△）",
+            "当期純利益",
+        ),
+    ),
+    ConceptMap(
         field_name="operating_income",
         # CurrentYearDuration income-statement fact. Used by the screen
         # to filter for "solid profitability" alongside net-cash level.
