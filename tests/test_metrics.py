@@ -21,10 +21,12 @@ def test_investment_securities_haircut_is_70_percent():
 
 
 def test_formula_components_and_threshold_match_plan():
-    """Sanity: ratio = (current_assets - interest_bearing_debt
+    """Sanity: ratio = (current_assets - total_liabilities
                       + 0.7*investment_securities) / market_cap.
-    A company with current_assets=100, debt=20, sec=10, mc=87 → ratio
-    = (100 - 20 + 7) / 87 = 1.0 → just qualifies."""
+    A company with current_assets=100, total_liabilities=20, sec=10, mc=87
+    → ratio = (100 - 20 + 7) / 87 = 1.0 → just qualifies. The choice
+    of total_liabilities vs interest_bearing_debt is justified in
+    metrics.py module docstring (empirical Q5-collapse fix)."""
     ratio = (100 - 20 + INVESTMENT_SECURITIES_HAIRCUT * 10) / 87
     assert ratio == 1.0
     assert ratio >= QUALIFY_THRESHOLD
