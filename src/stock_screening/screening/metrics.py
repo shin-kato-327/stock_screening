@@ -181,3 +181,87 @@ def persist_screen_results(engine: Engine, run_date: date, df: pd.DataFrame) -> 
     with engine.begin() as conn:
         conn.execute(sql, rows)
     return len(rows)
+
+
+# --- Turnaround signal --------------------------------------------------
+#
+# A turnaround candidate is a stock whose operations are *recovering* —
+# distinct from a value trap (cheap and stagnant). Three companion
+# measurements off the multi-year mart:
+#
+#   op_income_yoy  = (op_income_now - op_income_prev) / |op_income_prev|
+#   sales_yoy      = (net_sales_now - net_sales_prev) / net_sales_prev
+#   margin_change  = (op_income_now / net_sales_now)
+#                  - (op_income_prev / net_sales_prev)
+#
+# Combined judgment:
+#   - op_income_yoy > 0.20 AND sales_yoy > 0:  real recovery
+#   - op_income_yoy > 0.20 AND sales_yoy <= 0: cost-cut driven (often fragile)
+#   - op_income_yoy <= 0:                       not turning around
+#
+# Returns NaN for companies with fewer than 2 visible filings — common
+# for our pre-2024 backtests since financials backfill starts at 2022-04-25
+# (most TSE companies have only one filing visible until 2024 when their
+# FY2023 reports land).
+
+_TURNAROUND_SQL = text(
+    """
+    WITH visible AS (
+        SELECT fa."secCode", fa.period_end,
+               fa.operating_income, fa.net_sales
+        FROM t_financials_annual fa
+        WHERE fa.period_end <= :run_date
+    ),
+    ranked AS (
+        SELECT "secCode", period_end, operating_income, net_sales,
+               LAG(operating_income) OVER w AS op_income_prev,
+               LAG(net_sales) OVER w AS net_sales_prev,
+               LAG(period_end) OVER w AS period_end_prev
+        FROM visible
+        WINDOW w AS (PARTITION BY "secCode" ORDER BY period_end)
+    )
+    SELECT DISTINCT ON ("secCode")
+        "secCode" AS sec_code, period_end, period_end_prev,
+        operating_income, op_income_prev,
+        net_sales, net_sales_prev
+    FROM ranked
+    WHERE op_income_prev IS NOT NULL OR net_sales_prev IS NOT NULL
+    ORDER BY "secCode", period_end DESC
+    """
+)
+
+
+def compute_turnaround_score(engine: Engine, run_date: date) -> pd.DataFrame:
+    """For each company with ≥2 visible annual filings by run_date,
+    return YoY changes in op income, sales, and operating margin.
+    Companies with insufficient history are absent from the output.
+    """
+    with engine.connect() as conn:
+        rows = conn.execute(_TURNAROUND_SQL, {"run_date": run_date}).fetchall()
+
+    cols = [
+        "sec_code", "period_end", "period_end_prev",
+        "operating_income", "op_income_prev",
+        "net_sales", "net_sales_prev",
+    ]
+    df = pd.DataFrame(rows, columns=cols)
+    if df.empty:
+        return df.assign(
+            op_income_yoy=pd.Series(dtype=float),
+            sales_yoy=pd.Series(dtype=float),
+            margin_change=pd.Series(dtype=float),
+        )
+
+    for c in ("operating_income", "op_income_prev", "net_sales", "net_sales_prev"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    df["op_income_yoy"] = (df["operating_income"] - df["op_income_prev"]) / df[
+        "op_income_prev"
+    ].abs()
+    df["sales_yoy"] = (df["net_sales"] - df["net_sales_prev"]) / df["net_sales_prev"]
+
+    margin_now = df["operating_income"] / df["net_sales"]
+    margin_prev = df["op_income_prev"] / df["net_sales_prev"]
+    df["margin_change"] = margin_now - margin_prev
+
+    return df

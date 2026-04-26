@@ -92,6 +92,17 @@ CONCEPTS: tuple[ConceptMap, ...] = (
         labels=("資産合計", "総資産額"),
     ),
     ConceptMap(
+        field_name="net_sales",
+        # CurrentYearDuration income-statement fact (top line). Used by
+        # the turnaround signal alongside operating_income to distinguish
+        # revenue-growing recoveries from cost-cut-only "fake" turnarounds.
+        concept_ids=(
+            "jpcrp_cor:NetSalesSummaryOfBusinessResults",
+            "jppfs_cor:NetSales",
+        ),
+        labels=("売上高",),
+    ),
+    ConceptMap(
         field_name="operating_income",
         # CurrentYearDuration income-statement fact. Used by the screen
         # to filter for "solid profitability" alongside net-cash level.
