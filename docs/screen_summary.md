@@ -130,6 +130,53 @@ identified catalyst. Some of these are chronic value traps from the
 | 52730 | 三谷セキサン | 1.66 | 3.6 | 36.4 | mom −4% |
 | 75950 | アルゴグラフィックス | 1.59 | 4.2 | 31.3 | mom flat |
 
+## Multi-entry robustness (2-year hold across 4 windows)
+
+The single-period sweet-spot result (+76.6%) raised the obvious "is
+this a 2022 cohort fluke?" question. The robustness lab
+(`scripts/strategy_lab_robustness.py`) re-runs all strategies on 4
+entry dates spaced ~6mo apart with a fixed 2-year hold, comparing
+each to TOPIX over the same window.
+
+| Strategy | Avg return | Avg excess vs TOPIX | Win rate | Avg n |
+|---|---|---|---|---|
+| **value_quality** (op_margin>10%) | +64.8% | **+25.2pp** | 100% | 1.7 |
+| **sales_growth** (sales_yoy>5%) | +57.8% | **+19.9pp** | 100% | 7.5 |
+| **z_composite** (top 20% blend) | +49.4% | +11.5pp | 100% | 9.5 |
+| **top10_by_ratio** (concentrated) | +48.7% | +10.9pp | 100% | 9.5 |
+| **value_momentum** (mom_6m>0) | +47.0% | +9.2pp | 75% | 11.5 |
+| baseline_sweet_spot | +43.9% | +6.1pp | 100% | 20.0 |
+| low_per_top10 | +29.6% | −8.2pp | 25% | 7.2 |
+| cash_compounders | +25.6% | −12.2pp | 25% | 43.2 |
+| reversal | +15.0% | −19.1pp | 0% | 2.3 |
+| qmom (high op_yld + momentum) | +4.3% | **−33.5pp** | 0% | 158.0 |
+
+Avg TOPIX across the 4 entries (2022-12-30, 2023-06-30, 2023-12-29,
+2024-06-28): +37.9%.
+
+**Key takeaways**:
+
+- **The value-net-cash core works across all 4 windows.** Baseline
+  sweet-spot beat TOPIX 4-for-4 by an average +6pp. Not a 2022 fluke.
+- **`sales_growth` is the best usable signal.** +19.9pp excess with
+  n=7.5 average — enough diversification, real edge. Adding "top-line
+  accelerating" to net-cash value reliably finds compounders.
+- **`top10_by_ratio` is robust as a concentrated bet.** +10.9pp excess
+  with 100% win rate. The original +87.7% (3-yr hold) wasn't a fluke,
+  just amplified by the longer horizon.
+- **`value_quality` has the highest excess but n=1.7** — not a usable
+  strategy, just a tiny set of stocks that happen to win.
+- **`qmom` is consistently disastrous (−33.5pp).** High op_yield + high
+  6m momentum picks late-cycle peak earners. Strong negative confirmation
+  that "buy what's working" without value discipline destroys returns.
+- **`cash_compounders` is too inclusive.** Big universe (n=43), mediocre
+  picks. The composite filter dilutes too aggressively.
+
+This is also the empirical answer to the surprising single-period
+finding "value_momentum hurt returns." Across 4 entry dates,
+value_momentum (+9.2pp) beats baseline (+6.1pp) on average. The 2022
+finding was the noisy one, not the signal.
+
 ## Caveats
 
 1. **Look-ahead bias**: production `compute_screen` filters by
