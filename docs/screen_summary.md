@@ -177,6 +177,61 @@ finding "value_momentum hurt returns." Across 4 entry dates,
 value_momentum (+9.2pp) beats baseline (+6.1pp) on average. The 2022
 finding was the noisy one, not the signal.
 
+## Low-float hybrid (validated edge, recommended overlay)
+
+**Setup**: within the sweet-spot screen (¥3-30B + ratio>1.5 + PER≤10),
+take the bottom 33% by issued shares. Over 10 quarterly entry dates
+(2022-12 → 2025-03) with 12-month buy-and-hold, this beats TOPIX by
+**+24.5pp on average** (n=3.4 stocks per window, 80% win rate).
+
+| Threshold | n/win | Avg return | Avg excess | MC p-value | Note |
+|---|---|---|---|---|---|
+| 25% | 2.4 | +49.1% | +29.4pp | 0.014 | Highest excess but single-stock risk |
+| **33%** | **3.4** | **+44.2%** | **+24.5pp** | **0.006** | Recommended |
+| 50% | 5.8 | +35.8% | +16.1pp | 0.226 | Edge is sweet-spot effect, not float |
+| 100% (no float) | 13.4 | +33.3% | +13.6pp | — | Sweet-spot baseline |
+
+The Monte Carlo column (p-value vs 500 random subsets per entry of
+the same size within sweet-spot) is the key validation: **at the 50%
+threshold the float signal is indistinguishable from random selection
+within the sweet-spot.** Only at 25-33% does float add measurable
+value beyond the sweet-spot effect itself.
+
+**Why low float?** Empirically, low share count (proxy for tightly-held
+ownership / illiquidity premium) within an already-cheap, net-cash-rich
+universe selects for stocks where the value is more likely to be
+realized via buyout, special dividend, or accumulation by long-horizon
+holders rather than diluted away.
+
+Sanity checks that ruled out alternative explanations:
+- **Not "smaller stocks":** Selecting bottom 33% by market cap instead
+  of issued shares gave only +6.3pp excess (vs +24.5pp for float).
+- **Not single-stock dependence:** 34 total picks across 10 entries
+  span 15 unique stocks. Removing the most-recurring stock still
+  leaves +17.7pp excess.
+- **Not just survival bias:** Per-pick distribution across all 34
+  picks is nearly symmetric (skew 0.09), median +46%, P10 −1.6% —
+  the edge is broad-based, not driven by outliers.
+
+### Current picks at 33% threshold (n=7, 2026-04-26)
+
+7 stocks chosen from today's 24-stock sweet-spot universe by lowest
+issued shares:
+
+| Code | Company | Ratio | PER | MC ¥B | Shares (M) | Existing flag |
+|---|---|---|---|---|---|---|
+| 46350 | 東京インキ | 3.31 | 3.0 | 3.6 | 2.73 | T |
+| 56030 | 虹技 | 1.53 | 5.8 | 4.6 | 3.36 | **Q+T** |
+| 80460 | 丸藤シートパイル | 5.56 | 2.4 | 3.7 | 4.00 | Q |
+| 61370 | 小池酸素工業 | 2.42 | 2.3 | 8.4 | 4.52 | **Q+T** |
+| 80060 | ユアサ・フナショク | 2.08 | 3.9 | 8.0 | 4.90 | T |
+| 74270 | エコートレーディング | 1.84 | 5.4 | 5.4 | 6.08 | — |
+| 37980 | ULSグループ | 2.85 | 2.0 | 3.3 | 6.23 | T |
+
+5 of 7 already carry quality (Q) or turnaround (T) flags from the
+fundamental screen — the float signal is correlated with but not
+redundant to those signals.
+
 ## Caveats
 
 1. **Look-ahead bias**: production `compute_screen` filters by
