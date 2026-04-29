@@ -35,8 +35,15 @@ class Position:
 
 
 def ibkr_to_sec_code(symbol: str) -> str:
-    """4-digit IBKR ticker → 5-digit DB code. Already-5-digit stays."""
+    """IBKR ticker → 5-digit DB code.
+
+    IBKR returns Japanese symbols as e.g. "5363.T" (TSE suffix). Strip
+    the exchange suffix and pad 4-digit tickers with a trailing 0.
+    """
     s = symbol.strip()
+    # Strip exchange suffix after a dot (e.g. ".T" for TSE).
+    if "." in s:
+        s = s.split(".", 1)[0]
     if len(s) == 4 and s.isdigit():
         return s + "0"
     return s

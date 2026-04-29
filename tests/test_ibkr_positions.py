@@ -44,6 +44,12 @@ def test_ibkr_to_sec_code_handles_whitespace():
     assert ibkr_to_sec_code("  5363  ") == "53630"
 
 
+def test_ibkr_to_sec_code_strips_exchange_suffix():
+    assert ibkr_to_sec_code("5363.T") == "53630"
+    assert ibkr_to_sec_code("4231.T") == "42310"
+    assert ibkr_to_sec_code("6137.T") == "61370"
+
+
 def test_parse_open_positions_extracts_all_rows():
     root = ET.fromstring(SAMPLE_XML)
     positions = parse_open_positions(root)
