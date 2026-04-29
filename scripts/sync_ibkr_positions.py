@@ -58,9 +58,9 @@ def main() -> int:
     print("=" * 130)
     print(
         f"  {'code':<6} {'name':<24} {'qty':>6} {'cost':>8} {'mark':>8} "
-        f"{'P&L':>9} {'ratio':>6} {'PER':>5} {'flags':>6}  status"
+        f"{'P&L':>9} {'ret%':>7} {'ratio':>6} {'PER':>5} {'flags':>6}  status"
     )
-    print("-" * 130)
+    print("-" * 138)
 
     for _, r in df.iterrows():
         flags = []
@@ -84,10 +84,15 @@ def main() -> int:
         mark_s = f"¥{r['mark_price']:.0f}" if pd.notna(r.get("mark_price")) else "?"
         pl_s = f"{r['unrealized_pl']:+,.0f}" if pd.notna(r.get("unrealized_pl")) else "?"
 
+        if pd.notna(r.get("cost_basis")) and pd.notna(r.get("mark_price")) and r["cost_basis"]:
+            ret_s = f"{(r['mark_price']/r['cost_basis']-1)*100:+.1f}%"
+        else:
+            ret_s = "?"
+
         print(
             f"  {r['symbol']:<6} {(r['description'] or '')[:24]:<24} "
             f"{r['quantity']:>6.0f} {cost_s:>8} {mark_s:>8} "
-            f"{pl_s:>9} {ratio_s:>6} {per_s:>5} {flag_s:>6}  {status}"
+            f"{pl_s:>9} {ret_s:>7} {ratio_s:>6} {per_s:>5} {flag_s:>6}  {status}"
         )
 
     # Summary by status
