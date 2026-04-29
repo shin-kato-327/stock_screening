@@ -170,3 +170,4 @@ parameters.json
 /financial_data_pg16/
 # airflow logs (kept out of git, mounted into container)
 /airflow/logs/
+.DS_Store
