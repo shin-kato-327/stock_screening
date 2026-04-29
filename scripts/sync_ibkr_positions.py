@@ -58,9 +58,13 @@ def main() -> int:
     print("=" * 130)
     print(
         f"  {'code':<6} {'name':<24} {'qty':>6} {'cost':>8} {'mark':>8} "
-        f"{'P&L':>9} {'ret%':>7} {'ratio':>6} {'PER':>5} {'flags':>6}  status"
+        f"{'value':>11} {'P&L':>9} {'ret%':>7} {'ratio':>6} {'PER':>5} {'flags':>6}  status"
     )
-    print("-" * 138)
+    print("-" * 150)
+
+    total_value = 0.0
+    total_pl = 0.0
+    total_cost = 0.0
 
     for _, r in df.iterrows():
         flags = []
@@ -84,6 +88,18 @@ def main() -> int:
         mark_s = f"¥{r['mark_price']:.0f}" if pd.notna(r.get("mark_price")) else "?"
         pl_s = f"{r['unrealized_pl']:+,.0f}" if pd.notna(r.get("unrealized_pl")) else "?"
 
+        if pd.notna(r.get("mark_price")) and pd.notna(r.get("quantity")):
+            value = float(r["mark_price"]) * float(r["quantity"])
+            value_s = f"¥{value:>10,.0f}"
+            total_value += value
+        else:
+            value_s = "?"
+
+        if pd.notna(r.get("cost_basis")) and pd.notna(r.get("quantity")):
+            total_cost += float(r["cost_basis"]) * float(r["quantity"])
+        if pd.notna(r.get("unrealized_pl")):
+            total_pl += float(r["unrealized_pl"])
+
         if pd.notna(r.get("cost_basis")) and pd.notna(r.get("mark_price")) and r["cost_basis"]:
             ret_s = f"{(r['mark_price']/r['cost_basis']-1)*100:+.1f}%"
         else:
@@ -92,8 +108,27 @@ def main() -> int:
         print(
             f"  {r['symbol']:<6} {(r['description'] or '')[:24]:<24} "
             f"{r['quantity']:>6.0f} {cost_s:>8} {mark_s:>8} "
-            f"{pl_s:>9} {ret_s:>7} {ratio_s:>6} {per_s:>5} {flag_s:>6}  {status}"
+            f"{value_s:>11} {pl_s:>9} {ret_s:>7} {ratio_s:>6} {per_s:>5} {flag_s:>6}  {status}"
         )
+
+    # Portfolio totals
+    print("-" * 150)
+    if total_cost:
+        total_ret_pct = (total_value / total_cost - 1) * 100
+        weight_lines = []
+        for _, r in df.iterrows():
+            if pd.notna(r.get("mark_price")) and pd.notna(r.get("quantity")):
+                v = float(r["mark_price"]) * float(r["quantity"])
+                w = v / total_value * 100 if total_value else 0
+                weight_lines.append((r["symbol"], v, w))
+        print(
+            f"  TOTAL                                                              "
+            f"¥{total_value:>10,.0f} {total_pl:>+9,.0f} {total_ret_pct:>+6.1f}%"
+        )
+        print(f"\n  Position weights (by current value):")
+        for sym, v, w in sorted(weight_lines, key=lambda x: -x[1]):
+            bar = "█" * int(w / 2)
+            print(f"    {sym:<6}  ¥{v:>10,.0f}  {w:>5.1f}%  {bar}")
 
     # Summary by status
     print()
