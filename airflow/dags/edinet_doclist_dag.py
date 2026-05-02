@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 @dag(
     dag_id="edinet_doclist_dag",
     description="Fetch EDINET filings list for the run date; upsert into t_doc_list.",
-    start_date=datetime(2025, 4, 1, tzinfo=JST),
+    start_date=datetime(2026, 5, 1, tzinfo=JST),
     schedule="0 22 * * *",  # 22:00 JST — well after typical filing windows
     catchup=True,
     max_active_runs=4,

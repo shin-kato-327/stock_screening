@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 @dag(
     dag_id="jquants_daily_prices_dag",
     description="JQuants v2 daily_quotes → t_daily_stock_perf.",
-    start_date=datetime(2025, 4, 1, tzinfo=JST),
+    start_date=datetime(2026, 5, 1, tzinfo=JST),
     schedule="0 17 * * 1-5",
     catchup=True,
     max_active_runs=4,

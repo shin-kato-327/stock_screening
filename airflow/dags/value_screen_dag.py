@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 @dag(
     dag_id="value_screen_dag",
     description="Net-cash-ratio screen → t_screen_results.",
-    start_date=datetime(2025, 4, 1, tzinfo=JST),
+    start_date=datetime(2026, 5, 1, tzinfo=JST),
     schedule="0 18 * * 1-5",  # 18:00 JST weekdays — after prices DAG
     catchup=True,
     max_active_runs=4,

@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
         "For filings submitted on the run date: download XBRL bundles, "
         "parse facts → t_financials, refresh latest-flag and annual mart."
     ),
-    start_date=datetime(2025, 4, 1, tzinfo=JST),
+    start_date=datetime(2026, 5, 1, tzinfo=JST),
     schedule="30 22 * * *",  # 30 min after doclist
     catchup=True,
     max_active_runs=4,
