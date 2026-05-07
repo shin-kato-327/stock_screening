@@ -5,7 +5,7 @@
 # narrow shell allowlist; cannot Edit, Write, push, or run the DB.
 #
 # Inputs (env): DIAG_DAG_ID, DIAG_TASK_ID, DIAG_RUN_ID, DIAG_LOG_URL
-# Outputs: a Signal message with root cause + suggested fix diff.
+# Outputs: a Telegram message with root cause + suggested fix diff.
 #
 # Cost guard: --max-turns 30, ~5 diagnoses/day rate limit (file-based).
 
@@ -28,7 +28,7 @@ if [ "$count" -ge "$MAX_PER_DAY" ]; then
     echo "rate limit hit ($count/$MAX_PER_DAY for $today); skipping diagnosis" >&2
     # Send the cap notice so the user knows we deliberately skipped.
     PYTHONPATH="$REPO_ROOT/src" python3 -c "
-from stock_screening.signal_alerts.client import send
+from stock_screening.telegram_alerts.client import send
 send(f'⏸  Diagnosis skipped: $MAX_PER_DAY/day cap reached. ${DIAG_DAG_ID}.${DIAG_TASK_ID} failed.')
 " || true
     exit 0
@@ -99,7 +99,7 @@ EOF
 if ! command -v claude > /dev/null 2>&1; then
     echo "claude CLI not on PATH; cannot diagnose" >&2
     PYTHONPATH="$REPO_ROOT/src" python3 -c "
-from stock_screening.signal_alerts.client import send
+from stock_screening.telegram_alerts.client import send
 send(f'⚠️  ${DIAG_DAG_ID}.${DIAG_TASK_ID} failed; Claude diagnosis unavailable (CLI missing).')
 " || true
     exit 1
@@ -115,17 +115,17 @@ claude \
     "$PROMPT" > "$ANALYSIS_FILE" 2> "$LOG_FILE" || {
     echo "claude invocation failed; see $LOG_FILE" >&2
     PYTHONPATH="$REPO_ROOT/src" python3 -c "
-from stock_screening.signal_alerts.client import send
+from stock_screening.telegram_alerts.client import send
 send(f'⚠️  ${DIAG_DAG_ID}.${DIAG_TASK_ID} failed; Claude diagnosis errored. See $SESSION_DIR.')
 " || true
     exit 1
 }
 
-# ---- post the analysis to Signal ----
+# ---- post the analysis to Telegram ----
 PYTHONPATH="$REPO_ROOT/src" python3 - "$ANALYSIS_FILE" "$DIAG_DAG_ID" "$DIAG_TASK_ID" "$DIAG_LOG_URL" <<'PY'
 import sys
 from pathlib import Path
-from stock_screening.signal_alerts.client import send
+from stock_screening.telegram_alerts.client import send
 
 analysis_path = Path(sys.argv[1])
 dag_id, task_id, log_url = sys.argv[2], sys.argv[3], sys.argv[4]

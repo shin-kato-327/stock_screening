@@ -1,4 +1,4 @@
-"""Daily Signal report: position snapshot + new screen entrants.
+"""Daily Telegram report: position snapshot + new screen entrants.
 
 Runs after the paper_trading_sim DAG has settled for the day so the
 NAV/positions tables reflect the latest screen.
@@ -26,7 +26,7 @@ sys.path.insert(0, "/opt/airflow/dags")
 from _alerts import alert_on_failure  # noqa: E402
 sys.path.insert(0, "/opt/airflow/src")
 from stock_screening import db  # noqa: E402
-from stock_screening.signal_alerts.client import send as signal_send  # noqa: E402
+from stock_screening.telegram_alerts.client import send as telegram_send  # noqa: E402
 
 JST = pendulum.timezone("Asia/Tokyo")
 logger = logging.getLogger(__name__)
@@ -35,8 +35,8 @@ HAIRCUT = 0.7
 
 
 @dag(
-    dag_id="daily_signal_report_dag",
-    description="Daily Signal message: positions + new screen entrants.",
+    dag_id="daily_telegram_report_dag",
+    description="Daily Telegram message: positions + new screen entrants.",
     start_date=datetime(2026, 5, 1, tzinfo=JST),
     # 19:30 JST weekdays — after paper_trading_sim_dag at 19:00.
     schedule="30 19 * * 1-5",
@@ -48,9 +48,9 @@ HAIRCUT = 0.7
         "retries": 1,
         "retry_delay": timedelta(minutes=5),
     },
-    tags=["signal"],
+    tags=["telegram"],
 )
-def daily_signal_report_dag():
+def daily_telegram_report_dag():
 
     @task
     def build_and_send(data_interval_end=None):
@@ -131,7 +131,7 @@ def daily_signal_report_dag():
         body_parts.append("")
         body_parts.append(f"Total qualifying today: {len(today_codes)}")
         message = "\n".join(p for p in body_parts if p is not None)
-        signal_send(message)
+        telegram_send(message)
         logger.info("daily report sent (%d new entrants, %d total)",
                     len(new_entrants), len(today_codes))
 
@@ -189,4 +189,4 @@ def _is_nan(x) -> bool:
         return False
 
 
-daily_signal_report_dag()
+daily_telegram_report_dag()
