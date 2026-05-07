@@ -25,9 +25,25 @@ from pathlib import Path
 # but the source mounts give us /opt/airflow/src as the import root.
 sys.path.insert(0, "/opt/airflow/src")
 
+from airflow.models import Variable  # noqa: E402
+
 from stock_screening.telegram_alerts.client import send as telegram_send  # noqa: E402
 
 logger = logging.getLogger(__name__)
+
+
+def _hydrate_env_from_variables() -> None:
+    """Mirror Airflow Variables into os.environ so the pure-Python
+    Telegram client (which reads from os.environ) works inside an
+    Airflow task context. Idempotent — only sets if not already set."""
+    for name in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):
+        if name not in os.environ:
+            try:
+                value = Variable.get(name, default_var=None)
+            except Exception:
+                value = None
+            if value:
+                os.environ[name] = value
 
 
 def _format_alert(context: dict) -> str:
@@ -82,6 +98,7 @@ def _spawn_diagnosis(context: dict) -> None:
 
 def alert_on_failure(context: dict) -> None:
     """Airflow on_failure_callback. Best-effort — never raises."""
+    _hydrate_env_from_variables()
     try:
         telegram_send(_format_alert(context))
     except Exception as e:

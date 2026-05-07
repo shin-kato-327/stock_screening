@@ -23,7 +23,7 @@ from airflow.decorators import dag, task
 from sqlalchemy import text
 
 sys.path.insert(0, "/opt/airflow/dags")
-from _alerts import alert_on_failure  # noqa: E402
+from _alerts import _hydrate_env_from_variables, alert_on_failure  # noqa: E402
 sys.path.insert(0, "/opt/airflow/src")
 from stock_screening import db  # noqa: E402
 from stock_screening.telegram_alerts.client import send as telegram_send  # noqa: E402
@@ -54,6 +54,7 @@ def daily_telegram_report_dag():
 
     @task
     def build_and_send(data_interval_end=None):
+        _hydrate_env_from_variables()
         run_date = (data_interval_end or pendulum.now(JST)).date()
         engine = db.get_engine()
 
