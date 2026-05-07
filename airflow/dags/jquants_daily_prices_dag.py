@@ -81,7 +81,12 @@ def jquants_daily_prices_dag():
         ).round().astype("Int64")
 
         cols = ("Date", "ShokenCode", "close", "volume", "marketCap")
-        rows = merged[list(cols)].where(pd.notna(merged[list(cols)]), None).to_dict("records")
+        # Drop rows where close or volume is NaN — JQuants returns NaN
+        # for halted / non-trading issues on the date, and bigint columns
+        # reject NaN. Casting to object first lets us replace NaN with
+        # None reliably for the marketCap column (Int64 with <NA>).
+        upsert_df = merged[list(cols)].dropna(subset=["close", "volume"])
+        rows = upsert_df.astype(object).where(pd.notna(upsert_df), None).to_dict("records")
 
         col_list = ", ".join(f'"{c}"' for c in cols)
         placeholders = ", ".join(f":{c}" for c in cols)
