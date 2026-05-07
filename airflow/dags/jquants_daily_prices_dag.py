@@ -58,16 +58,21 @@ def jquants_daily_prices_dag():
         quotes_subset = quotes[["ShokenCode", "close", "volume"]].copy()
 
         engine = db.get_engine()
-        shares = pd.read_sql(
-            text(
-                'SELECT DISTINCT ON ("secCode") "secCode" AS "ShokenCode", issued_shares '
-                "FROM t_financials_annual "
-                "WHERE issued_shares IS NOT NULL AND period_end <= :d "
-                'ORDER BY "secCode", period_end DESC'
-            ),
-            engine,
-            params={"d": run_date},
-        )
+        # pd.read_sql with a SQLAlchemy text() expression is broken under
+        # SA 1.4 + pandas 2.2 ("Query must be a string"). Use the
+        # connection-execute-fetchall path so the dependency matrix
+        # doesn't matter.
+        with engine.connect() as conn:
+            share_rows = conn.execute(
+                text(
+                    'SELECT DISTINCT ON ("secCode") "secCode" AS "ShokenCode", issued_shares '
+                    "FROM t_financials_annual "
+                    "WHERE issued_shares IS NOT NULL AND period_end <= :d "
+                    'ORDER BY "secCode", period_end DESC'
+                ),
+                {"d": run_date},
+            ).fetchall()
+        shares = pd.DataFrame(share_rows, columns=["ShokenCode", "issued_shares"])
 
         merged = quotes_subset.merge(shares, on="ShokenCode", how="left")
         merged["Date"] = run_date
