@@ -15,6 +15,11 @@ from datetime import datetime, timedelta
 import pendulum
 from airflow.decorators import dag, task
 
+# Alerting hook for the on_failure_callback (Day 1 of Signal alerts).
+import sys as _sys
+_sys.path.insert(0, '/opt/airflow/dags')
+from _alerts import alert_on_failure  # noqa: E402
+
 JST = pendulum.timezone("Asia/Tokyo")
 
 logger = logging.getLogger(__name__)
@@ -29,6 +34,7 @@ logger = logging.getLogger(__name__)
     max_active_runs=1,
     default_args={
         "owner": "stock_screening",
+        "on_failure_callback": alert_on_failure,
         "depends_on_past": True,
         "retries": 1,
         "retry_delay": timedelta(minutes=5),
