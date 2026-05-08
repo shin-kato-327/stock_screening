@@ -16,9 +16,18 @@ x-airflow-common: &airflow-common
     - ../src:/opt/airflow/src
     - ../alembic:/opt/airflow/alembic
     - ../alembic.ini:/opt/airflow/alembic.ini
+    # Day-2 Claude diagnosis: scripts/ for the diagnose script the
+    # callback ssh's into, and a dedicated SSH key (read-only) that's
+    # restricted on the host side to ONLY run diag_wrapper.sh.
+    - ../scripts:/opt/airflow/scripts:ro
+    - ${DIAGNOSE_SSH_KEY_PATH:-/home/shinkato/.ssh/diagnose_id}:/opt/airflow/diagnose_id:ro
   user: "${AIRFLOW_UID:-50000}:0"
   networks:
     - financial_network
+  # Allow workers to resolve the host as `host.docker.internal` for
+  # the SSH-back-to-host pattern used by Day-2 diagnosis.
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
 
 services:
   postgres:
