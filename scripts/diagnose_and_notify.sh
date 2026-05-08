@@ -106,13 +106,15 @@ send(f'⚠️  ${DIAG_DAG_ID}.${DIAG_TASK_ID} failed; Claude diagnosis unavailab
 fi
 
 cd "$REPO_ROOT"
-claude \
+# Pipe the prompt via stdin so it doesn't get slurped by the variadic
+# --allowedTools / --disallowedTools flags.
+printf '%s' "$PROMPT" | claude \
     --print \
     --max-turns 30 \
     --output-format text \
-    --allowedTools "Read,Bash(git:*),Bash(grep:*),Bash(find:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(ls:*),Bash(cat:*)" \
-    --disallowedTools "Edit,Write,NotebookEdit,Bash(rm:*),Bash(mv:*),Bash(docker:*),Bash(psql:*),Bash(curl:*),Bash(ssh:*),Bash(scp:*)" \
-    "$PROMPT" > "$ANALYSIS_FILE" 2> "$LOG_FILE" || {
+    --allowedTools "Read" "Bash(git:*)" "Bash(grep:*)" "Bash(find:*)" "Bash(head:*)" "Bash(tail:*)" "Bash(wc:*)" "Bash(ls:*)" "Bash(cat:*)" \
+    --disallowedTools "Edit" "Write" "NotebookEdit" "Bash(rm:*)" "Bash(mv:*)" "Bash(docker:*)" "Bash(psql:*)" "Bash(curl:*)" "Bash(ssh:*)" "Bash(scp:*)" \
+    > "$ANALYSIS_FILE" 2> "$LOG_FILE" || {
     echo "claude invocation failed; see $LOG_FILE" >&2
     PYTHONPATH="$REPO_ROOT/src" python3 -c "
 from stock_screening.telegram_alerts.client import send
