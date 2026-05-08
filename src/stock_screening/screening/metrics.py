@@ -265,3 +265,111 @@ def compute_turnaround_score(engine: Engine, run_date: date) -> pd.DataFrame:
     df["margin_change"] = margin_now - margin_prev
 
     return df
+
+
+# --- Strict strategy cohort (per docs/STRATEGY.md) ----------------------
+#
+# The looser `compute_screen()` above is a Q-flag-shaped pre-filter
+# (ratio>=1.0 + op_yield>5% + mom_6m>0). The strategy proper layers on
+# tighter cuts: a small-cap band, a higher ratio threshold, a PER cap,
+# and the validated lowest-float-33% overlay. This function returns the
+# final cohort the daily report and trade-plan generator should use.
+
+# Strategy parameters from STRATEGY.md (kept in lock-step).
+STRICT_CAP_MIN = 3_000_000_000
+STRICT_CAP_MAX = 30_000_000_000
+STRICT_RATIO_THRESHOLD = 1.5
+STRICT_PER_MAX = 10.0
+STRICT_FLOAT_PCT = 0.33
+
+
+def compute_strict_cohort(engine: Engine, run_date: date) -> pd.DataFrame:
+    """Return the strict strategy cohort for run_date.
+
+    Columns: sec_code, name, ratio, per, market_cap, issued_shares,
+             rank_in_cohort (1-N by float).
+    The result is the lowest-float STRICT_FLOAT_PCT subset of the
+    sweet-spot universe (cap STRICT_CAP_MIN..MAX + ratio>STRICT_RATIO
+    + 0<PER<=STRICT_PER_MAX), sorted by issued_shares ascending.
+    """
+    sql = text(
+        """
+        WITH latest AS (
+            SELECT DISTINCT ON (fa."secCode")
+                fa."secCode" AS sec_code,
+                fa.current_assets,
+                fa.total_liabilities,
+                fa.investment_securities,
+                fa.net_income,
+                fa.issued_shares
+            FROM t_financials_annual fa
+            JOIN t_doc_list dl ON dl."docID" = fa.source_doc_id
+            WHERE dl."submitDateTime"::date <= :run_date
+              AND fa.current_assets IS NOT NULL
+              AND fa.issued_shares IS NOT NULL
+            ORDER BY fa."secCode", fa.period_end DESC
+        )
+        SELECT
+            l.sec_code,
+            l.current_assets,
+            l.total_liabilities,
+            l.investment_securities,
+            l.net_income,
+            l.issued_shares,
+            d."marketCap" AS market_cap,
+            (
+                SELECT "filerName" FROM t_doc_list
+                WHERE "secCode" = l.sec_code
+                ORDER BY "submitDateTime" DESC LIMIT 1
+            ) AS name
+        FROM latest l
+        JOIN t_daily_stock_perf d
+          ON d."ShokenCode" = l.sec_code
+         AND d."Date" = :run_date
+         AND d."marketCap" IS NOT NULL
+         AND d."marketCap" > 0
+        """
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(sql, {"run_date": run_date}).fetchall()
+
+    cols = [
+        "sec_code", "current_assets", "total_liabilities",
+        "investment_securities", "net_income", "issued_shares",
+        "market_cap", "name",
+    ]
+    df = pd.DataFrame(rows, columns=cols)
+    if df.empty:
+        return df.assign(ratio=pd.Series(dtype=float), per=pd.Series(dtype=float))
+
+    for c in (
+        "current_assets", "total_liabilities", "investment_securities",
+        "net_income", "issued_shares", "market_cap",
+    ):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    df["ratio"] = (
+        df["current_assets"].fillna(0)
+        - df["total_liabilities"].fillna(0)
+        + INVESTMENT_SECURITIES_HAIRCUT * df["investment_securities"].fillna(0)
+    ) / df["market_cap"]
+    df["per"] = df["market_cap"] / df["net_income"]
+
+    sweet = df[
+        df["market_cap"].between(STRICT_CAP_MIN, STRICT_CAP_MAX)
+        & (df["ratio"] > STRICT_RATIO_THRESHOLD)
+        & (df["per"] > 0)
+        & (df["per"] <= STRICT_PER_MAX)
+    ].copy()
+
+    if sweet.empty:
+        return sweet
+
+    sweet = sweet.sort_values("issued_shares").reset_index(drop=True)
+    n_picks = max(1, int(len(sweet) * STRICT_FLOAT_PCT))
+    cohort = sweet.head(n_picks).copy()
+    cohort["rank_in_cohort"] = range(1, len(cohort) + 1)
+    return cohort[
+        ["sec_code", "name", "ratio", "per", "market_cap",
+         "issued_shares", "rank_in_cohort"]
+    ]
