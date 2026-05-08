@@ -36,7 +36,11 @@ def _hydrate_env_from_variables() -> None:
     """Mirror Airflow Variables into os.environ so the pure-Python
     Telegram client (which reads from os.environ) works inside an
     Airflow task context. Idempotent — only sets if not already set."""
-    for name in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):
+    for name in (
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_CHAT_ID",
+        "TELEGRAM_DIAGNOSIS_ENABLED",
+    ):
         if name not in os.environ:
             try:
                 value = Variable.get(name, default_var=None)
