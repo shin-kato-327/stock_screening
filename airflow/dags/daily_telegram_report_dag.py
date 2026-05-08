@@ -18,9 +18,9 @@ import logging
 import sys
 from datetime import datetime, timedelta
 
+import pandas as pd
 import pendulum
 from airflow.decorators import dag, task
-from sqlalchemy import text
 
 sys.path.insert(0, "/opt/airflow/dags")
 from _alerts import _hydrate_env_from_variables, alert_on_failure  # noqa: E402
@@ -54,67 +54,38 @@ def daily_telegram_report_dag():
 
     @task
     def build_and_send(data_interval_end=None):
+        from stock_screening.screening.metrics import compute_strict_cohort
+
         _hydrate_env_from_variables()
         run_date = (data_interval_end or pendulum.now(JST)).date()
         engine = db.get_engine()
 
-        # New entrants = sweet-spot today minus sweet-spot yesterday.
-        # Use the t_screen_results table that the value_screen_dag writes.
-        with engine.connect() as conn:
-            today_codes = {
-                r[0]
-                for r in conn.execute(
-                    text(
-                        'SELECT "secCode" FROM t_screen_results '
-                        'WHERE run_date = :d AND qualifies = TRUE'
-                    ),
-                    {"d": run_date},
-                ).fetchall()
-            }
-            prev_codes = set()
-            for back in (1, 2, 3):
-                prev_d = run_date - timedelta(days=back)
-                rows = conn.execute(
-                    text(
-                        'SELECT "secCode" FROM t_screen_results '
-                        'WHERE run_date = :d AND qualifies = TRUE'
-                    ),
-                    {"d": prev_d},
-                ).fetchall()
-                if rows:
-                    prev_codes = {r[0] for r in rows}
-                    break
-            new_entrants = sorted(today_codes - prev_codes)
+        # The strict strategy cohort (cap ¥3-30B + ratio>1.5 + PER<=10
+        # + lowest-float-33% overlay, per docs/STRATEGY.md). This is
+        # the set the user actually buys from — much narrower than the
+        # loose "qualifies" pre-filter in t_screen_results.
+        cohort_today = compute_strict_cohort(engine, run_date)
 
-            entrant_details = []
-            if new_entrants:
-                rows = conn.execute(
-                    text(
-                        'SELECT "secCode", ratio, market_cap '
-                        'FROM t_screen_results WHERE run_date = :d '
-                        'AND "secCode" = ANY(:codes) '
-                        'ORDER BY ratio DESC'
-                    ),
-                    {"d": run_date, "codes": list(new_entrants)},
-                ).fetchall()
-                for sc, ratio, mc in rows:
-                    name_row = conn.execute(
-                        text(
-                            'SELECT "filerName" FROM t_doc_list '
-                            'WHERE "secCode" = :c '
-                            'ORDER BY "submitDateTime" DESC LIMIT 1'
-                        ),
-                        {"c": sc},
-                    ).fetchone()
-                    name = name_row[0] if name_row else ""
-                    entrant_details.append(
-                        f"  • {sc} {name[:24]:<24}  ratio={float(ratio):.2f}  "
-                        f"MC=¥{float(mc) / 1e9:.1f}B"
-                    )
+        # Compare to the most recent prior session that produced a
+        # non-empty cohort. Look back up to a week to skip Golden Week
+        # / weekend holes.
+        prev_cohort = pd.DataFrame()
+        prev_d = None
+        for back in range(1, 8):
+            d = run_date - timedelta(days=back)
+            c = compute_strict_cohort(engine, d)
+            if not c.empty:
+                prev_cohort = c
+                prev_d = d
+                break
 
-        # Optional: positions snapshot (skipped if IBKR creds aren't set,
-        # since this DAG also serves as the daily heartbeat even without
-        # broker integration).
+        today_codes = set(cohort_today["sec_code"]) if not cohort_today.empty else set()
+        prev_codes = set(prev_cohort["sec_code"]) if not prev_cohort.empty else set()
+        new_entrants = sorted(today_codes - prev_codes)
+        dropped = sorted(prev_codes - today_codes)
+
+        # Optional: positions snapshot (skipped if IBKR creds aren't
+        # configured; the DAG still serves as the daily heartbeat).
         positions_block = _try_positions_snapshot()
 
         body_parts = [
@@ -122,19 +93,36 @@ def daily_telegram_report_dag():
             "",
             positions_block,
             "",
-            f"🆕 New screen entrants ({len(new_entrants)}):",
+            f"🎯 Strategy cohort ({len(cohort_today)}): "
+            f"sweet-spot ∩ lowest-float-33%",
         ]
-        if entrant_details:
-            body_parts.extend(entrant_details)
+        if cohort_today.empty:
+            body_parts.append("  (none — universe didn't produce any picks today)")
         else:
-            body_parts.append("  (none — universe unchanged from prior session)")
+            for _, r in cohort_today.iterrows():
+                marker = " 🆕" if r["sec_code"] in new_entrants else ""
+                body_parts.append(
+                    f"  {int(r['rank_in_cohort'])}. {r['sec_code']} "
+                    f"{(r['name'] or '')[:24]:<24} "
+                    f"ratio={float(r['ratio']):.2f} "
+                    f"PER={float(r['per']):.1f} "
+                    f"MC=¥{float(r['market_cap'])/1e9:.1f}B"
+                    f"{marker}"
+                )
 
-        body_parts.append("")
-        body_parts.append(f"Total qualifying today: {len(today_codes)}")
+        if dropped:
+            body_parts.append("")
+            body_parts.append(
+                f"📤 Dropped from cohort vs {prev_d.isoformat() if prev_d else '?'}: "
+                f"{', '.join(dropped)}"
+            )
+
         message = "\n".join(p for p in body_parts if p is not None)
         telegram_send(message)
-        logger.info("daily report sent (%d new entrants, %d total)",
-                    len(new_entrants), len(today_codes))
+        logger.info(
+            "daily report sent (cohort=%d, new=%d, dropped=%d, prev_d=%s)",
+            len(cohort_today), len(new_entrants), len(dropped), prev_d,
+        )
 
     build_and_send()
 
