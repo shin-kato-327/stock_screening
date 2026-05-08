@@ -40,6 +40,8 @@ def _hydrate_env_from_variables() -> None:
         "TELEGRAM_BOT_TOKEN",
         "TELEGRAM_CHAT_ID",
         "TELEGRAM_DIAGNOSIS_ENABLED",
+        "IBKR_FLEX_TOKEN",
+        "IBKR_POSITIONS_QUERY_ID",
     ):
         if name not in os.environ:
             try:
