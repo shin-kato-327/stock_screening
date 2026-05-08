@@ -22,6 +22,11 @@ x-airflow-common: &airflow-common
     - ../scripts:/opt/airflow/scripts:ro
     - ${DIAGNOSE_SSH_KEY_PATH:-/home/shinkato/.ssh/diagnose_id}:/opt/airflow/diagnose_id:ro
   user: "${AIRFLOW_UID:-50000}:0"
+  # Add the host shinkato group (typically GID 1000) so the worker can
+  # read the bind-mounted SSH key without changing ownership of the
+  # file on the host.
+  group_add:
+    - "${HOST_USER_GID:-1000}"
   networks:
     - financial_network
   # Allow workers to resolve the host as `host.docker.internal` for
