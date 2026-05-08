@@ -36,7 +36,11 @@ def _hydrate_env_from_variables() -> None:
     """Mirror Airflow Variables into os.environ so the pure-Python
     Telegram client (which reads from os.environ) works inside an
     Airflow task context. Idempotent — only sets if not already set."""
-    for name in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"):
+    for name in (
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_CHAT_ID",
+        "TELEGRAM_DIAGNOSIS_ENABLED",
+    ):
         if name not in os.environ:
             try:
                 value = Variable.get(name, default_var=None)
@@ -67,33 +71,50 @@ def _format_alert(context: dict) -> str:
 
 
 def _spawn_diagnosis(context: dict) -> None:
-    """Fire-and-forget Claude-driven diagnosis. The actual heavy
-    lifting lives in scripts/diagnose_and_notify.sh on the host."""
+    """Fire-and-forget Claude-driven diagnosis.
+
+    SSHes from the airflow worker container back to the host's shinkato
+    user. The host-side authorized_keys entry is `command=`-restricted
+    to the diag_wrapper.sh, which parses safe DIAG_* env vars from
+    $SSH_ORIGINAL_COMMAND and execs diagnose_and_notify.sh through a
+    login shell (so claude is on PATH). This keeps Claude OAuth tokens
+    on the host — they never enter the airflow container.
+    """
     if os.environ.get("TELEGRAM_DIAGNOSIS_ENABLED", "").lower() not in ("1", "true", "yes"):
         return
-    script = Path("/opt/airflow/scripts/diagnose_and_notify.sh")
-    if not script.is_file():
-        logger.warning("diagnosis script %s not found; skipping", script)
+    key = Path("/opt/airflow/diagnose_id")
+    if not key.is_file():
+        logger.warning("diagnosis SSH key %s not found; skipping", key)
         return
     ti = context.get("task_instance")
-    env = {
-        **os.environ,
-        "DIAG_DAG_ID": context["dag"].dag_id,
-        "DIAG_TASK_ID": ti.task_id if ti else "",
-        "DIAG_RUN_ID": ti.run_id if ti else "",
-        "DIAG_LOG_URL": ti.log_url if ti and hasattr(ti, "log_url") else "",
-    }
+    diag_kv = (
+        f"DIAG_DAG_ID={context['dag'].dag_id} "
+        f"DIAG_TASK_ID={ti.task_id if ti else ''} "
+        f"DIAG_RUN_ID={ti.run_id if ti else ''} "
+        f"DIAG_LOG_URL={ti.log_url if ti and hasattr(ti, 'log_url') else ''}"
+    )
+    cmd = [
+        "ssh",
+        "-i", str(key),
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "UserKnownHostsFile=/tmp/diagnose_known_hosts",
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=10",
+        f"shinkato@host.docker.internal",
+        diag_kv,
+    ]
     try:
         subprocess.Popen(
-            [str(script)],
-            env=env,
+            cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        logger.info("diagnosis script spawned for %s.%s", env["DIAG_DAG_ID"], env["DIAG_TASK_ID"])
+        logger.info("diagnosis ssh spawned for %s.%s",
+                    context["dag"].dag_id,
+                    ti.task_id if ti else "?")
     except Exception as e:
-        logger.exception("failed to spawn diagnosis script: %s", e)
+        logger.exception("failed to spawn diagnosis ssh: %s", e)
 
 
 def alert_on_failure(context: dict) -> None:
