@@ -57,11 +57,24 @@ def jquants_daily_prices_dag():
             logger.info("no quotes for %s (likely non-trading day)", run_date)
             return 0
 
-        # v2 uses C / Vo for close / volume; collapse 5-digit market codes
-        # to 4-digit secCode (last digit is a check digit added by JPX).
-        quotes = quotes.rename(columns={"Code": "ShokenCode", "C": "close", "Vo": "volume"})
+        # v2 column names: C/Vo = raw close/volume, AdjC/AdjFactor =
+        # corporate-action-adjusted close + factor. The screen's
+        # momentum_6m filter reads adj_close, so this DAG must persist
+        # both — without adj_close, the screen zero-qualifies every
+        # stock for any day this DAG fills.
+        quotes = quotes.rename(columns={
+            "Code": "ShokenCode",
+            "C": "close",
+            "Vo": "volume",
+            "AdjC": "adj_close",
+            "AdjFactor": "adj_factor",
+        })
         quotes["ShokenCode"] = quotes["ShokenCode"].astype(str)
-        quotes_subset = quotes[["ShokenCode", "close", "volume"]].copy()
+        keep_cols = ["ShokenCode", "close", "volume"]
+        for c in ("adj_close", "adj_factor"):
+            if c in quotes.columns:
+                keep_cols.append(c)
+        quotes_subset = quotes[keep_cols].copy()
 
         engine = db.get_engine()
         # pd.read_sql with a SQLAlchemy text() expression is broken under
@@ -86,12 +99,18 @@ def jquants_daily_prices_dag():
             merged["close"].astype("float64") * merged["issued_shares"].astype("float64")
         ).round().astype("Int64")
 
-        cols = ("Date", "ShokenCode", "close", "volume", "marketCap")
+        cols = ["Date", "ShokenCode", "close", "volume", "marketCap"]
+        # Optionally include adj_close / adj_factor when JQuants returned
+        # them. They're present on most days but missing on some
+        # (e.g. when the corporate-action calendar is empty).
+        for c in ("adj_close", "adj_factor"):
+            if c in merged.columns:
+                cols.append(c)
         # Drop rows where close or volume is NaN — JQuants returns NaN
         # for halted / non-trading issues on the date, and bigint columns
         # reject NaN. Casting to object first lets us replace NaN with
         # None reliably for the marketCap column (Int64 with <NA>).
-        upsert_df = merged[list(cols)].dropna(subset=["close", "volume"])
+        upsert_df = merged[cols].dropna(subset=["close", "volume"])
         rows = upsert_df.astype(object).where(pd.notna(upsert_df), None).to_dict("records")
 
         col_list = ", ".join(f'"{c}"' for c in cols)
