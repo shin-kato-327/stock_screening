@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# qa-psql — restricted shim for the Telegram Q&A bot's Claude session.
+# Hard-codes host/port/user/db so Claude can't pivot to a remote
+# postgres or a different role even if it tries to. Accepts ONE arg:
+# the SELECT query. Refuses any other invocation.
+#
+# Install: sudo install -m 755 systemd/qa-psql /usr/local/bin/qa-psql
+
+set -euo pipefail
+
+if [ "$#" -ne 1 ] || [ -z "${1:-}" ]; then
+    echo "Usage: qa-psql \"<SELECT statement>\"" >&2
+    echo "qa-psql refuses multiple args or empty queries." >&2
+    exit 2
+fi
+
+# Block obvious abuse vectors at the shim layer (the bot_readonly
+# role is the real defense; this is just an early-error path).
+case "$1" in
+    *"\\!"*|*"\\copy"*|*"\\\!"*)
+        echo "qa-psql: psql meta-commands not allowed (\\!, \\copy)" >&2
+        exit 3
+        ;;
+esac
+
+# Connection params come from env. PGPASSWORD must already be set
+# by the caller (the bot's runner.sh).
+exec /usr/bin/psql \
+    --host="${BOT_POSTGRES_HOST:-localhost}" \
+    --port="${BOT_POSTGRES_PORT:-5433}" \
+    --username="${BOT_POSTGRES_USER:-bot_readonly}" \
+    --dbname="${BOT_POSTGRES_DB:-financial_data}" \
+    --no-psqlrc \
+    --no-password \
+    --pset=pager=off \
+    --pset=expanded=auto \
+    -c "$1"
