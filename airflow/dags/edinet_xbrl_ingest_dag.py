@@ -106,6 +106,11 @@ def edinet_xbrl_ingest_dag():
             }
             for f in facts
         ]
+        # The PK is (docID, itemName, periodEnd, categoryID) — migration
+        # 0005 switched off periodStart when it became nullable for
+        # Instant facts. scripts/backfill_window.py and
+        # scripts/reparse_for_prior_year.py already use this key; this
+        # DAG had drifted to the old (periodStart-based) version.
         sql = text(
             """
             INSERT INTO t_financials
@@ -113,10 +118,10 @@ def edinet_xbrl_ingest_dag():
                  "categoryID", concept_id, currency_code)
             VALUES (:docID, :itemName, :amount, :periodStart, :periodEnd,
                     :categoryID, :concept_id, :currency_code)
-            ON CONFLICT ("docID", "itemName", "periodStart", "categoryID")
+            ON CONFLICT ("docID", "itemName", "periodEnd", "categoryID")
             DO UPDATE SET
                 amount = EXCLUDED.amount,
-                "periodEnd" = EXCLUDED."periodEnd",
+                "periodStart" = EXCLUDED."periodStart",
                 concept_id = EXCLUDED.concept_id,
                 currency_code = EXCLUDED.currency_code
             """
