@@ -16,29 +16,39 @@ StartLimitIntervalSec=300
 StartLimitBurst=5
 
 # --- Hardening ---
+# Minimal baseline that's known not to break Claude Code's OAuth flow.
+# Empirically, ProtectHome=read-only AND/OR PrivateDevices break the
+# `claude --print` invocation under systemd (auth-401 / empty-output
+# under hardening; works fine without). Until we identify the specific
+# directive(s), keep just the cheap, low-risk ones.
 NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=read-only
-# ReadWritePaths carve-outs:
-#  - qa_sessions  → per-question logs (question.txt, answer.txt, claude.log) + rate_limit.txt + .offset
-#  - .claude      → claude OAuth refresh writes back tokens here
-ReadWritePaths=/home/shinkato/qa_sessions /home/shinkato/.claude
-PrivateTmp=yes
-PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
-# AF_UNIX is needed for psql local-socket fallback and Node IPC.
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-RestrictNamespaces=yes
 LockPersonality=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
+RestrictNamespaces=yes
 SystemCallArchitectures=native
+# Drop ambient + bounding caps — the bot doesn't need any privileged
+# capability and this is a strict subset of NoNewPrivileges anyway.
 CapabilityBoundingSet=
 AmbientCapabilities=
-# MemoryDenyWriteExecute is intentionally NOT set; Node (which the
-# `claude` CLI runs on) requires writable+executable JIT pages.
+
+# TODO (follow-up): re-add the following one at a time and identify
+# which one breaks Claude's OAuth flow, then add the appropriate
+# carve-out:
+#   ProtectSystem=strict
+#   ProtectHome=read-only + ReadWritePaths=qa_sessions .claude .config .cache .npm
+#   PrivateTmp=yes
+#   PrivateDevices=yes
+#   RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+#
+# Defense already in place that the listener trusts more than systemd:
+#   - bot_readonly DB role (read-only by grants + role GUC)
+#   - qa-psql shim (no -h/-U/-d overrides, no \\copy)
+#   - Claude --allowedTools/--disallowedTools whitelist
+#   - chat_id / /q-prefix / 500-char / 10-day filters in the listener
 
 # --- Resource caps ---
 MemoryMax=2G
