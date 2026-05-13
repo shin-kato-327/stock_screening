@@ -143,13 +143,13 @@ def _run_claude(question: str, session_dir: Path) -> tuple[bool, str, Path]:
 
     try:
         # The wall-clock timeout is enforced inside runner.sh via the
-        # `timeout` command; we add 30s on top here as a belt.
+        # `timeout` command (180s); we add a generous backstop here.
         completed = subprocess.run(
             [str(_runner_path())],
             env=env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            timeout=120,
+            timeout=210,
         )
     except subprocess.TimeoutExpired:
         return False, "Claude timed out (>120s wall clock).", answer_file
@@ -190,7 +190,7 @@ def _handle(update: dict) -> int | None:
 
     # Acknowledge.
     try:
-        telegram_send("Working on it… (~30-90s)")
+        telegram_send("Working on it… (~30-180s; longer for multi-table joins)")
     except Exception as e:
         logger.exception("ack send failed (continuing anyway): %s", e)
 

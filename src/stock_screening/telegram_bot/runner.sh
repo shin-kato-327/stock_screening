@@ -71,7 +71,7 @@ EOF
 
 # Invoke Claude. Prompt fed via stdin to avoid the variadic-flag
 # slurping bug we hit in PR #13.
-printf '%s' "$PROMPT" | timeout 90 claude \
+printf '%s' "$PROMPT" | timeout 180 claude \
     --print \
     --max-turns 20 \
     --output-format text \
