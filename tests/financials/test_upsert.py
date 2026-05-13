@@ -8,12 +8,16 @@ t_financials — so we lock that down here.
 
 from __future__ import annotations
 
+import re
+import subprocess
 from datetime import date
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from stock_screening.edinet.xbrl_parser import FinancialFact
 from stock_screening.financials.upsert import (
     _UPSERT_SQL,
+    _fact_to_row,
     upsert_financial_facts,
 )
 
@@ -120,3 +124,79 @@ def test_row_shape_matches_sql_bind_params():
         "docID", "itemName", "amount", "periodStart", "periodEnd",
         "categoryID", "concept_id", "currency_code",
     }
+
+
+def test_fact_to_row_field_mapping():
+    """Verify that snake_case FinancialFact fields map to the correct
+    camelCase SQL column names with the correct values — not just that
+    the right key names exist, but that the value under each key is the
+    value from the corresponding fact field.
+
+    This catches a class of rename bugs where the key name is right but
+    the wrong field was used as the value (e.g., doc_id and item_name
+    swapped)."""
+    f = FinancialFact(
+        doc_id="S100ZZZZ",
+        item_name="純資産合計",
+        amount=9_876_543.0,
+        period_start=date(2025, 4, 1),
+        period_end=date(2026, 3, 31),
+        category_id="CurrentYearInstant",
+        concept_id="jpcrp_cor:NetAssets",
+        currency_code="JPY",
+    )
+    row = _fact_to_row(f)
+    assert row["docID"] == "S100ZZZZ"
+    assert row["itemName"] == "純資産合計"
+    assert row["amount"] == 9_876_543.0
+    assert row["periodStart"] == date(2025, 4, 1)
+    assert row["periodEnd"] == date(2026, 3, 31)
+    assert row["categoryID"] == "CurrentYearInstant"
+    assert row["concept_id"] == "jpcrp_cor:NetAssets"
+    assert row["currency_code"] == "JPY"
+
+
+def test_single_insert_into_t_financials_in_codebase():
+    """Structural anti-drift test: there must be exactly ONE
+    'INSERT INTO t_financials' clause (not t_financials_annual or any
+    other variant) in the entire Python source tree, and it must live
+    in src/stock_screening/financials/upsert.py.
+
+    This test fails immediately if anyone copy-pastes the upsert SQL
+    back into the DAG, a script, or a new module — which is the exact
+    drift class that caused the PR #22 production failure.
+
+    Uses `grep -r` via subprocess so it scans every .py file without
+    importing them (avoids transitive import errors from airflow/etc.)."""
+    repo_root = Path(__file__).resolve().parents[2]
+    this_file = str(Path(__file__).resolve())
+    result = subprocess.run(
+        ["grep", "-rn", "--include=*.py", "INSERT INTO t_financials", str(repo_root)],
+        capture_output=True,
+        text=True,
+    )
+    # grep exits 0 if matches found, 1 if none — both are fine here.
+    # Non-zero exit for other reasons (e.g. permission errors) would be
+    # a test-infrastructure problem; we ignore that and focus on matches.
+    matches = [
+        line for line in result.stdout.splitlines()
+        # Exclude the annual-mart table (different table, intentional separate SQL)
+        if "t_financials_annual" not in line
+        # Exclude this test file itself (it contains the search term as a string literal)
+        and this_file not in line
+    ]
+
+    canonical = str(repo_root / "src" / "stock_screening" / "financials" / "upsert.py")
+    non_canonical = [m for m in matches if canonical not in m]
+
+    assert not non_canonical, (
+        f"Found INSERT INTO t_financials outside the canonical module "
+        f"(src/stock_screening/financials/upsert.py).\n"
+        f"Offending locations (DAG drift risk):\n"
+        + "\n".join(f"  {m}" for m in non_canonical)
+    )
+    assert len(matches) == 1, (
+        f"Expected exactly 1 INSERT INTO t_financials in the codebase "
+        f"(in upsert.py), found {len(matches)}:\n"
+        + "\n".join(f"  {m}" for m in matches)
+    )
