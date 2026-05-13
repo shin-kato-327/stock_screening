@@ -33,6 +33,7 @@ from stock_screening import config, db
 from stock_screening.edinet.client import download_xbrl_bundle
 from stock_screening.edinet.xbrl_parser import extract_facts_many
 from stock_screening.financials.build_annual_mart import build_for_doc
+from stock_screening.financials.upsert import upsert_financial_facts
 
 
 def select_pending_docs(engine, start: date, end: date) -> list[str]:
@@ -72,32 +73,11 @@ def reparse_one(engine, edinet_key: str, doc_id: str) -> tuple[int, int]:
             f for f in extract_facts_many(doc_id, xbrl_files) if f.period_end is not None
         ]
 
-    if not facts:
-        return 0, 0
-
-    rows = [
-        {
-            "docID": f.doc_id, "itemName": f.item_name, "amount": f.amount,
-            "periodStart": f.period_start, "periodEnd": f.period_end,
-            "categoryID": f.category_id, "concept_id": f.concept_id,
-            "currency_code": f.currency_code,
-        }
-        for f in facts
-    ]
-    sql = text(
-        """
-        INSERT INTO t_financials
-            ("docID","itemName",amount,"periodStart","periodEnd","categoryID",concept_id,currency_code)
-        VALUES (:docID,:itemName,:amount,:periodStart,:periodEnd,:categoryID,:concept_id,:currency_code)
-        ON CONFLICT ("docID","itemName","periodEnd","categoryID")
-        DO UPDATE SET amount=EXCLUDED.amount, concept_id=EXCLUDED.concept_id, currency_code=EXCLUDED.currency_code
-        """
-    )
-    with engine.begin() as conn:
-        conn.execute(sql, rows)
-
+    # Shared upsert — same SQL as the DAG and backfill_window.
+    # See src/stock_screening/financials/upsert.py.
+    n = upsert_financial_facts(engine, facts)
     mart_n = build_for_doc(engine, doc_id)
-    return len(facts), mart_n
+    return n, mart_n
 
 
 def main():

@@ -93,42 +93,11 @@ def edinet_xbrl_ingest_dag():
         if not facts:
             return 0
 
-        rows = [
-            {
-                "docID": f.doc_id,
-                "itemName": f.item_name,
-                "amount": f.amount,
-                "periodStart": f.period_start,
-                "periodEnd": f.period_end,
-                "categoryID": f.category_id,
-                "concept_id": f.concept_id,
-                "currency_code": f.currency_code,
-            }
-            for f in facts
-        ]
-        # The PK is (docID, itemName, periodEnd, categoryID) — migration
-        # 0005 switched off periodStart when it became nullable for
-        # Instant facts. scripts/backfill_window.py and
-        # scripts/reparse_for_prior_year.py already use this key; this
-        # DAG had drifted to the old (periodStart-based) version.
-        sql = text(
-            """
-            INSERT INTO t_financials
-                ("docID", "itemName", amount, "periodStart", "periodEnd",
-                 "categoryID", concept_id, currency_code)
-            VALUES (:docID, :itemName, :amount, :periodStart, :periodEnd,
-                    :categoryID, :concept_id, :currency_code)
-            ON CONFLICT ("docID", "itemName", "periodEnd", "categoryID")
-            DO UPDATE SET
-                amount = EXCLUDED.amount,
-                "periodStart" = EXCLUDED."periodStart",
-                concept_id = EXCLUDED.concept_id,
-                currency_code = EXCLUDED.currency_code
-            """
-        )
-        with engine.begin() as conn:
-            conn.execute(sql, rows)
-        return len(rows)
+        # Use the shared helper so future schema changes land in one
+        # place. See src/stock_screening/financials/upsert.py for
+        # rationale + the drift history that motivated it.
+        from stock_screening.financials.upsert import upsert_financial_facts
+        return upsert_financial_facts(engine, facts)
 
     @task
     def mark_latest_for_period(doc_ids: list[str]) -> int:

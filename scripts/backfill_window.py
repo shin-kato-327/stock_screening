@@ -43,6 +43,7 @@ from stock_screening.edinet.client import (
 )
 from stock_screening.edinet.xbrl_parser import extract_facts_many
 from stock_screening.financials.build_annual_mart import build_for_doc
+from stock_screening.financials.upsert import upsert_financial_facts
 from stock_screening.jquants.client import JQuantsClient
 from stock_screening.screening.metrics import compute_screen, persist_screen_results
 from stock_screening.simulation import portfolio
@@ -107,33 +108,11 @@ def step_xbrl_ingest(engine, edinet_key: str, d: date) -> tuple[int, int, int]:
             try:
                 paths = download_xbrl_bundle(doc_id, edinet_key, Path(tmp))
                 xbrl = [p for p in paths if p.suffix == ".xbrl"]
-                facts = [f for f in extract_facts_many(doc_id, xbrl) if f.period_end is not None]
-                if not facts:
-                    succeeded.append(doc_id)
-                    continue
-                rows = [
-                    {
-                        "docID": f.doc_id, "itemName": f.item_name, "amount": f.amount,
-                        "periodStart": f.period_start, "periodEnd": f.period_end,
-                        "categoryID": f.category_id, "concept_id": f.concept_id,
-                        "currency_code": f.currency_code,
-                    }
-                    for f in facts
-                ]
-                with engine.begin() as conn:
-                    conn.execute(
-                        text(
-                            """
-                            INSERT INTO t_financials
-                                ("docID","itemName",amount,"periodStart","periodEnd","categoryID",concept_id,currency_code)
-                            VALUES (:docID,:itemName,:amount,:periodStart,:periodEnd,:categoryID,:concept_id,:currency_code)
-                            ON CONFLICT ("docID","itemName","periodEnd","categoryID")
-                            DO UPDATE SET amount=EXCLUDED.amount, concept_id=EXCLUDED.concept_id, currency_code=EXCLUDED.currency_code
-                            """
-                        ),
-                        rows,
-                    )
-                total_facts += len(facts)
+                facts = extract_facts_many(doc_id, xbrl)
+                # Shared upsert — same SQL as the DAG and reparse script.
+                # See src/stock_screening/financials/upsert.py.
+                n = upsert_financial_facts(engine, facts)
+                total_facts += n
                 succeeded.append(doc_id)
             except Exception as e:
                 print(f"    [warn] {doc_id} failed: {type(e).__name__}: {str(e)[:120]}")
